@@ -5,11 +5,12 @@ import hashlib
 import ipaddress
 import re
 import socket
-import tempfile
+import ssl
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
+import truststore
 
 from .models import DownloadedPdf
 
@@ -63,12 +64,16 @@ class PdfDownloader:
         timeout_seconds: float,
         max_pdf_bytes: int,
         client: httpx.AsyncClient | None = None,
+        download_dir: Path = Path("downloads"),
     ) -> None:
         self._max_pdf_bytes = max_pdf_bytes
+        self._download_dir = download_dir
         self._owns_client = client is None
+        ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         self._client = client or httpx.AsyncClient(
             timeout=timeout_seconds,
             follow_redirects=False,
+            verify=ssl_context,
             headers={"User-Agent": "AlignmentIntelligenceCollector/0.1"},
         )
 
@@ -121,12 +126,11 @@ class PdfDownloader:
         digest = hashlib.sha256()
         size = 0
         prefix = b""
-        path: Path | None = None
+        self._download_dir.mkdir(parents=True, exist_ok=True)
+        path = self._download_dir / _safe_filename(fallback_filename)
+        partial_path = path.with_suffix(f"{path.suffix}.part")
         try:
-            with tempfile.NamedTemporaryFile(
-                prefix="alignment-collector-", suffix=".pdf", delete=False
-            ) as temporary:
-                path = Path(temporary.name)
+            with partial_path.open("wb") as temporary:
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
                     if size > self._max_pdf_bytes:
@@ -135,10 +139,9 @@ class PdfDownloader:
                         prefix += chunk[: 5 - len(prefix)]
                     digest.update(chunk)
                     temporary.write(chunk)
-            if path is None:
-                raise PdfDownloadError("Temporary file PDF gagal dibuat")
             if prefix != b"%PDF-":
                 raise PdfDownloadError("Isi file tidak memiliki signature PDF")
+            partial_path.replace(path)
             return DownloadedPdf(
                 path=path,
                 filename=filename,
@@ -147,6 +150,5 @@ class PdfDownloader:
                 content_type=content_type,
             )
         except BaseException:
-            if path is not None:
-                path.unlink(missing_ok=True)
+            partial_path.unlink(missing_ok=True)
             raise

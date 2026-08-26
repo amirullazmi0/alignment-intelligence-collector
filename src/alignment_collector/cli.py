@@ -4,6 +4,7 @@ import asyncio
 import json
 from typing import Annotated
 
+import httpx
 import typer
 from pydantic import ValidationError
 
@@ -49,8 +50,9 @@ def _run(mode: str, dry_run: bool, limit: int | None, verbose: bool) -> None:
     configure_logging(settings.log_level, settings.log_color, verbose=verbose)
     try:
         summary = asyncio.run(CollectorService(settings).run(mode, dry_run=dry_run, limit=limit))
-    except (RuntimeError, ValueError) as error:
-        typer.echo(f"Collector gagal: {error}", err=True)
+    except (httpx.HTTPError, RuntimeError, ValueError) as error:
+        message = str(error).strip() or type(error).__name__
+        typer.echo(f"Collector gagal: {message}", err=True)
         raise typer.Exit(code=1) from error
     _print_summary(summary)
 

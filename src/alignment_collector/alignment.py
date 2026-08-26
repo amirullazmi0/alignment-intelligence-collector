@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
+import ssl
 from collections.abc import Mapping
 from pathlib import Path
 
 import httpx
+import truststore
 
 from .models import SourceDocument, UploadResult
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AlignmentApiError(RuntimeError):
@@ -31,7 +36,13 @@ def _error_message(response: httpx.Response) -> str:
         return f"Alignment API HTTP {response.status_code}"
     mapping = _mapping(body)
     message = mapping.get("message") if mapping else None
-    return message if isinstance(message, str) else f"Alignment API HTTP {response.status_code}"
+    if isinstance(message, str):
+        return message
+    if isinstance(message, list):
+        messages = [item for item in message if isinstance(item, str)]
+        if messages:
+            return "; ".join(messages)
+    return f"Alignment API HTTP {response.status_code}"
 
 
 class AlignmentClient:
@@ -48,7 +59,11 @@ class AlignmentClient:
         self._password = password
         self._token: str | None = None
         self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+        if client is None:
+            ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            self._client = httpx.AsyncClient(timeout=timeout_seconds, verify=ssl_context)
+        else:
+            self._client = client
 
     async def __aenter__(self) -> AlignmentClient:
         return self
@@ -81,6 +96,14 @@ class AlignmentClient:
             self._token = None
             await self._login()
             response = await self._upload_once(document, pdf_path, filename)
+        if response.status_code == 400 and document.law_year is not None:
+            LOGGER.warning("Alignment API menolak metadata lawYear multipart; retry tanpa lawYear")
+            response = await self._upload_once(
+                document,
+                pdf_path,
+                filename,
+                include_law_year=False,
+            )
         if response.status_code == 409:
             return UploadResult(document_id=None, duplicate=True)
         if response.status_code == 429 or response.status_code >= 500:
@@ -96,7 +119,12 @@ class AlignmentClient:
         return UploadResult(document_id=document_id, duplicate=False)
 
     async def _upload_once(
-        self, document: SourceDocument, pdf_path: Path, filename: str
+        self,
+        document: SourceDocument,
+        pdf_path: Path,
+        filename: str,
+        *,
+        include_law_year: bool = True,
     ) -> httpx.Response:
         if self._token is None:
             raise RuntimeError("Alignment client belum login")
@@ -107,7 +135,7 @@ class AlignmentClient:
         }
         if document.law_number:
             form["lawNumber"] = document.law_number
-        if document.law_year is not None:
+        if include_law_year and document.law_year is not None:
             form["lawYear"] = str(document.law_year)
         if document.law_type:
             form["lawType"] = document.law_type

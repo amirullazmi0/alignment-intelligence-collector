@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,14 +19,14 @@ class CollectorSettings(BaseSettings):
         case_sensitive=False,
     )
 
-    collector_topic: str = Field(validation_alias="COLLECTOR_TOPIC")
+    collector_topic: str = Field(default="", validation_alias="COLLECTOR_TOPIC")
     collector_keywords: str = Field(default="", validation_alias="COLLECTOR_KEYWORDS")
     collector_exclude_keywords: str = Field(
         default="", validation_alias="COLLECTOR_EXCLUDE_KEYWORDS"
     )
     jdihn_base_url: str = Field(default="https://jdihn.go.id", validation_alias="JDIHN_BASE_URL")
     alignment_api_base_url: str = Field(
-        default="https://alignment-intelligence.apps.arulize.com/api",
+        default="https://alignment-intelligence-nest.apps.arulize.com",
         validation_alias="ALIGNMENT_API_BASE_URL",
     )
     alignment_email: str = Field(default="", validation_alias="ALIGNMENT_EMAIL")
@@ -36,6 +36,7 @@ class CollectorSettings(BaseSettings):
     state_db_path: Path = Field(
         default=Path(".data/collector.sqlite3"), validation_alias="STATE_DB_PATH"
     )
+    download_dir: Path = Field(default=Path("downloads"), validation_alias="DOWNLOAD_DIR")
     request_delay_seconds: float = Field(
         default=2.0, ge=0.5, validation_alias="REQUEST_DELAY_SECONDS"
     )
@@ -57,6 +58,8 @@ class CollectorSettings(BaseSettings):
     @classmethod
     def validate_https_url(cls, value: str) -> str:
         normalized = value.strip().rstrip("/")
+        if "://" not in normalized:
+            normalized = f"https://{normalized}"
         parsed = urlparse(normalized)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("URL harus berupa HTTP(S) absolut")
@@ -64,9 +67,14 @@ class CollectorSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_source(self) -> CollectorSettings:
-        host = (urlparse(self.jdihn_base_url).hostname or "").lower()
+        parsed = urlparse(self.jdihn_base_url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https":
+            raise ValueError("JDIHN_BASE_URL wajib menggunakan HTTPS")
         if host != "jdihn.go.id" and not host.endswith(".jdihn.go.id"):
             raise ValueError("JDIHN_BASE_URL harus menggunakan domain jdihn.go.id")
+        if host == "jdihn.go.id":
+            self.jdihn_base_url = urlunparse(parsed._replace(netloc="www.jdihn.go.id"))
         return self
 
     @field_validator("log_level")
@@ -84,6 +92,13 @@ class CollectorSettings(BaseSettings):
         if normalized not in {"auto", "always", "never"}:
             raise ValueError("LOG_COLOR harus auto, always, atau never")
         return normalized
+
+    @field_validator("download_dir")
+    @classmethod
+    def validate_download_dir(cls, value: Path) -> Path:
+        if value.is_absolute() or ".." in value.parts:
+            raise ValueError("DOWNLOAD_DIR harus berupa path relatif di dalam repo")
+        return value
 
     @property
     def keywords(self) -> tuple[str, ...]:

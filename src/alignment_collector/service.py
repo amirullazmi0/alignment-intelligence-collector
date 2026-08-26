@@ -9,7 +9,7 @@ from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt,
 
 from .alignment import AlignmentClient, PermanentUploadError, RetryableUploadError
 from .config import CollectorSettings
-from .jdihn import JdihnClient, ParseError
+from .jdihn import JdihnClient, JdihnRequestError, ParseError
 from .models import DocumentState, RunSummary, SearchItem, SourceDocument, UploadResult
 from .pdf import PdfDownloader, PdfDownloadError
 from .state import StateStore
@@ -71,6 +71,7 @@ class CollectorService:
                         PdfDownloader(
                             self._settings.http_timeout_seconds,
                             self._settings.max_pdf_bytes,
+                            download_dir=self._settings.download_dir,
                         )
                     )
 
@@ -80,10 +81,29 @@ class CollectorService:
                 summary.discovered = len(candidates)
                 actions = 0
                 for item in candidates:
+                    if actions >= max_actions:
+                        break
                     try:
                         document = await jdihn.fetch_detail(
                             item, self._settings.keywords, self._settings.exclude_keywords
                         )
+                    except (httpx.TransportError, JdihnRequestError) as error:
+                        summary.failed += 1
+                        if not dry_run:
+                            self._state.record(
+                                _stub_document(item, self._settings.jdihn_base_url),
+                                DocumentState.FAILED_RETRYABLE,
+                                error_code="JDIHN_NETWORK_ERROR",
+                                error_message=str(error),
+                                increment_attempts=True,
+                            )
+                        LOGGER.warning(
+                            "Gagal mengambil detail JDIHN source_id=%s, "
+                            "lanjut kandidat berikutnya: %s",
+                            item.source_id,
+                            error,
+                        )
+                        continue
                     except ParseError as error:
                         summary.failed += 1
                         if not dry_run:
@@ -118,8 +138,6 @@ class CollectorService:
                         )
                         continue
 
-                    if actions >= max_actions:
-                        continue
                     actions += 1
                     if not document.attachment_url:
                         summary.skipped_no_pdf += 1
@@ -224,10 +242,8 @@ class CollectorService:
             self._state.record(
                 document,
                 DocumentState.FAILED_RETRYABLE,
-                error_code="NETWORK_ERROR",
+                pdf_sha256=downloaded.sha256 if downloaded else None,
+                error_code=("ALIGNMENT_NETWORK_ERROR" if downloaded else "PDF_NETWORK_ERROR"),
                 error_message=str(error),
                 increment_attempts=True,
             )
-        finally:
-            if downloaded is not None:
-                downloaded.path.unlink(missing_ok=True)

@@ -113,9 +113,11 @@ def parse_search_page(page_html: str) -> list[SearchItem]:
         parsed: list[SearchItem] = []
         for raw_item in items:
             item = _as_mapping(raw_item)
-            source_id = _optional_int(item.get("id")) if item else None
-            title = _optional_string(item.get("title")) if item else None
-            category = _optional_string(item.get("category")) if item else None
+            if item is None:
+                continue
+            source_id = _optional_int(item.get("id"))
+            title = _optional_string(item.get("title"))
+            category = _optional_string(item.get("category"))
             if source_id is None or title is None or category is None:
                 continue
             parsed.append(
