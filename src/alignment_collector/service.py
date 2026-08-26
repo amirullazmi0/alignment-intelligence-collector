@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+import hashlib
+import logging
+from contextlib import AsyncExitStack
+
+import httpx
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from .alignment import AlignmentClient, PermanentUploadError, RetryableUploadError
+from .config import CollectorSettings
+from .jdihn import JdihnClient, ParseError
+from .models import DocumentState, RunSummary, SearchItem, SourceDocument, UploadResult
+from .pdf import PdfDownloader, PdfDownloadError
+from .state import StateStore
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _stub_document(item: SearchItem, base_url: str) -> SourceDocument:
+    fingerprint = hashlib.sha256(item.searchable_text.encode()).hexdigest()
+    return SourceDocument(
+        source_id=item.source_id,
+        source_url=f"{base_url.rstrip('/')}/doc/{item.source_id}",
+        title=item.title,
+        attachment_url=None,
+        category=item.category,
+        document_number=item.document_number,
+        law_type=item.law_type,
+        law_number=None,
+        law_year=item.law_year,
+        effective_status=item.effective_status,
+        matched_keywords=(),
+        fingerprint=fingerprint,
+    )
+
+
+class CollectorService:
+    def __init__(self, settings: CollectorSettings, state: StateStore | None = None) -> None:
+        self._settings = settings
+        self._state = state or StateStore(settings.state_db_path)
+
+    async def run(self, mode: str, *, dry_run: bool, limit: int | None = None) -> RunSummary:
+        self._state.initialize()
+        summary = RunSummary(mode=mode, dry_run=dry_run)
+        run_id = self._state.start_run(mode, dry_run)
+        max_actions = limit or self._settings.max_uploads_per_run
+
+        try:
+            async with AsyncExitStack() as stack:
+                jdihn = await stack.enter_async_context(
+                    JdihnClient(
+                        self._settings.jdihn_base_url,
+                        self._settings.http_timeout_seconds,
+                        self._settings.request_delay_seconds,
+                    )
+                )
+                alignment: AlignmentClient | None = None
+                downloader: PdfDownloader | None = None
+                if not dry_run:
+                    email, password = self._settings.require_alignment_credentials()
+                    alignment = await stack.enter_async_context(
+                        AlignmentClient(
+                            self._settings.alignment_api_base_url,
+                            email,
+                            password,
+                            self._settings.http_timeout_seconds,
+                        )
+                    )
+                    downloader = await stack.enter_async_context(
+                        PdfDownloader(
+                            self._settings.http_timeout_seconds,
+                            self._settings.max_pdf_bytes,
+                        )
+                    )
+
+                candidates = await jdihn.discover(
+                    self._settings.keywords, self._settings.exclude_keywords
+                )
+                summary.discovered = len(candidates)
+                actions = 0
+                for item in candidates:
+                    try:
+                        document = await jdihn.fetch_detail(
+                            item, self._settings.keywords, self._settings.exclude_keywords
+                        )
+                    except ParseError as error:
+                        summary.failed += 1
+                        if not dry_run:
+                            self._state.record(
+                                _stub_document(item, self._settings.jdihn_base_url),
+                                DocumentState.PARSE_FAILED,
+                                error_code="JDIHN_PARSE_ERROR",
+                                error_message=str(error),
+                                increment_attempts=True,
+                            )
+                        LOGGER.error("Gagal parsing JDIHN source_id=%s: %s", item.source_id, error)
+                        continue
+
+                    if not document.matched_keywords:
+                        continue
+                    summary.matched += 1
+                    existing = self._state.get(document.source_id)
+                    if existing and existing.fingerprint == document.fingerprint:
+                        if existing.status != DocumentState.FAILED_RETRYABLE:
+                            summary.skipped_existing += 1
+                            continue
+                    elif existing and existing.status in {
+                        DocumentState.UPLOADED,
+                        DocumentState.DUPLICATE,
+                        DocumentState.SOURCE_CHANGED,
+                    }:
+                        summary.source_changed += 1
+                        if not dry_run:
+                            self._state.record(document, DocumentState.SOURCE_CHANGED)
+                        LOGGER.warning(
+                            "Source berubah dan perlu review source_id=%s", document.source_id
+                        )
+                        continue
+
+                    if actions >= max_actions:
+                        continue
+                    actions += 1
+                    if not document.attachment_url:
+                        summary.skipped_no_pdf += 1
+                        if not dry_run:
+                            self._state.record(document, DocumentState.SKIPPED_NO_PDF)
+                        continue
+                    if dry_run:
+                        summary.preview.append(
+                            f"{document.source_id} | {document.title} | {document.attachment_url}"
+                        )
+                        continue
+
+                    if alignment is None or downloader is None:
+                        raise AssertionError("Client upload belum diinisialisasi")
+                    await self._process_document(document, downloader, alignment, summary)
+        except Exception:
+            summary.failed += 1
+            raise
+        finally:
+            self._state.finish_run(run_id, summary)
+        return summary
+
+    async def _process_document(
+        self,
+        document: SourceDocument,
+        downloader: PdfDownloader,
+        alignment: AlignmentClient,
+        summary: RunSummary,
+    ) -> None:
+        if document.attachment_url is None:
+            raise AssertionError("Document tidak memiliki attachment URL")
+        downloaded = None
+        try:
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(multiplier=1, min=1, max=8),
+                retry=retry_if_exception_type(httpx.TransportError),
+                reraise=True,
+            ):
+                with attempt:
+                    downloaded = await downloader.download(
+                        document.attachment_url, f"jdihn-{document.source_id}.pdf"
+                    )
+
+            if downloaded is None:
+                raise AssertionError("Download selesai tanpa file")
+            result: UploadResult | None = None
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(multiplier=1, min=1, max=8),
+                retry=retry_if_exception_type(RetryableUploadError),
+                reraise=True,
+            ):
+                with attempt:
+                    result = await alignment.upload(document, downloaded.path, downloaded.filename)
+            if result is None:
+                raise AssertionError("Upload selesai tanpa result")
+            if result.duplicate:
+                summary.duplicates += 1
+                self._state.record(
+                    document,
+                    DocumentState.DUPLICATE,
+                    pdf_sha256=downloaded.sha256,
+                    increment_attempts=True,
+                )
+            else:
+                summary.uploaded += 1
+                self._state.record(
+                    document,
+                    DocumentState.UPLOADED,
+                    pdf_sha256=downloaded.sha256,
+                    target_document_id=result.document_id,
+                    increment_attempts=True,
+                )
+                LOGGER.info(
+                    "Upload queued source_id=%s document_id=%s",
+                    document.source_id,
+                    result.document_id,
+                )
+        except RetryableUploadError as error:
+            summary.failed += 1
+            self._state.record(
+                document,
+                DocumentState.FAILED_RETRYABLE,
+                pdf_sha256=downloaded.sha256 if downloaded else None,
+                error_code="ALIGNMENT_RETRYABLE",
+                error_message=str(error),
+                increment_attempts=True,
+            )
+        except (PdfDownloadError, PermanentUploadError, httpx.HTTPStatusError) as error:
+            summary.failed += 1
+            self._state.record(
+                document,
+                DocumentState.FAILED_PERMANENT,
+                pdf_sha256=downloaded.sha256 if downloaded else None,
+                error_code=type(error).__name__,
+                error_message=str(error),
+                increment_attempts=True,
+            )
+        except httpx.TransportError as error:
+            summary.failed += 1
+            self._state.record(
+                document,
+                DocumentState.FAILED_RETRYABLE,
+                error_code="NETWORK_ERROR",
+                error_message=str(error),
+                increment_attempts=True,
+            )
+        finally:
+            if downloaded is not None:
+                downloaded.path.unlink(missing_ok=True)

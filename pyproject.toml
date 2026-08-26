@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alignment-intelligence-collector"
+version = "0.1.0"
+description = "Topic-driven JDIHN PDF collector for Alignment Intelligence"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28,<1",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "selectolax>=0.3.28,<1",
+    "tenacity>=9,<10",
+    "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.14,<2",
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.25,<1",
+    "respx>=0.22,<1",
+    "ruff>=0.9,<1",
+]
+
+[project.scripts]
+alignment-collector = "alignment_collector.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+alignment_collector = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["alignment_collector"]
