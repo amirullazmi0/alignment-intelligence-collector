@@ -25,7 +25,9 @@ COLLECTOR_KEYWORDS=pendidikan,sekolah,guru,dosen,universitas
 
 `COLLECTOR_TOPIC` otomatis menjadi keyword. Tambahkan sinonim pada
 `COLLECTOR_KEYWORDS` untuk memperluas cakupan. MVP hanya mengambil kategori
-`peraturan` yang memiliki lampiran PDF.
+`peraturan` yang memiliki lampiran PDF. Kandidat diprioritaskan berdasarkan hierarki
+UUD 1945, TAP MPR, UU/Perpu, PP, Perpres/Keppres/Permen, lalu Perda Provinsi.
+Peraturan universitas/rektor serta Perda kabupaten/kota tidak dikumpulkan.
 
 ## Menjalankan
 
@@ -34,6 +36,9 @@ Mulai dengan preview yang tidak login, download, atau upload:
 ```powershell
 yarn backfill:dry
 ```
+
+Pada run upload aktual, PDF disimpan permanen di folder `downloads/` dalam repo.
+Folder ini diabaikan Git dan dapat diubah melalui `DOWNLOAD_DIR` menggunakan path relatif.
 
 Lakukan smoke upload satu dokumen:
 
@@ -48,8 +53,18 @@ yarn backfill
 yarn incremental
 yarn incremental:dry
 yarn status
-yarn check
+yarn reset-failed
+yarn validate
 ```
+
+Dokumen yang gagal dengan sebab sementara (timeout, reset koneksi, HTTP 5xx atau 429
+dari JDIH sumber) ditandai `FAILED_RETRYABLE` dan otomatis dicoba lagi pada run
+berikutnya. Sebab yang tidak akan membaik sendiri — host lampiran sudah mati, URL bukan
+HTTPS, atau isinya ternyata bukan PDF — ditandai `FAILED_PERMANENT` dan tidak pernah
+dicoba ulang. Gunakan `yarn reset-failed` untuk mengembalikan seluruh dokumen
+`FAILED_PERMANENT` menjadi `FAILED_RETRYABLE`, misalnya setelah JDIH sumber memperbaiki
+lampirannya. Setiap kegagalan selalu ditulis ke log berikut `source_id`, status, kode,
+dan pesan penyebabnya.
 
 `backfill` dan `incremental` mengulang targeted search publik untuk setiap keyword.
 JDIHN membatasi hasil pencarian, sehingga collector ini tidak mengklaim menyalin
@@ -60,8 +75,11 @@ tidak diunggah otomatis.
 ## Safety
 
 - Tidak mengakses endpoint `/search-api/` yang dilarang oleh robots.txt JDIHN.
+- Pada Windows, request halaman JDIHN memakai `curl.exe` native karena WAF JDIHN
+  memutus TLS fingerprint OpenSSL Python; certificate verification tetap aktif dan
+  hanya revocation lookup Schannel yang dilewati.
 - Hanya mengunduh URL HTTPS publik; private, loopback, link-local, dan reserved IP ditolak.
+- Downloader memakai system certificate store melalui `truststore`; verifikasi TLS tetap aktif.
 - PDF dibatasi 50 MB serta divalidasi melalui MIME type dan signature `%PDF-`.
 - Tidak menulis ke PostgreSQL atau ImageKit secara langsung dan tidak menghapus dokumen.
 - Upload selalu melewati `POST /api/v1/documents` agar ingestion normal tetap berjalan.
-

@@ -4,17 +4,19 @@
   "private": true,
   "scripts": {
     "setup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1",
-    "start": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command backfill",
+    "start": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command backfill -DryRun",
     "backfill": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command backfill",
     "backfill:dry": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command backfill -DryRun",
     "incremental": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command incremental",
     "incremental:dry": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command incremental -DryRun",
     "status": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command status",
+    "reset-failed": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command reset-failed",
     "format": ".venv\\Scripts\\python.exe -m ruff format .",
     "format:check": ".venv\\Scripts\\python.exe -m ruff format --check .",
     "lint": ".venv\\Scripts\\python.exe -m ruff check .",
     "typecheck": ".venv\\Scripts\\python.exe -m mypy",
     "test": ".venv\\Scripts\\python.exe -m pytest",
-    "check": "yarn format:check && yarn lint && yarn typecheck && yarn test"
+    "check": "yarn format:check && yarn lint && yarn typecheck && yarn test",
+    "validate": "yarn format:check && yarn lint && yarn typecheck && yarn test"
   }
 }

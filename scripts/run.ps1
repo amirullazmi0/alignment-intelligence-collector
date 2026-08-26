@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('backfill', 'incremental', 'status')]
+    [ValidateSet('backfill', 'incremental', 'status', 'reset-failed')]
     [string]$Command = 'backfill',
     [switch]$DryRun,
     [ValidateRange(1, [int]::MaxValue)]
@@ -17,9 +17,10 @@ if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
 }
 
 $cliArgs = @('-m', 'alignment_collector', $Command)
-if ($DryRun -and $Command -ne 'status') { $cliArgs += '--dry-run' }
-if ($Limit -gt 0 -and $Command -ne 'status') { $cliArgs += @('--limit', "$Limit") }
-if ($VerboseLogs -and $Command -ne 'status') { $cliArgs += '--verbose' }
+$stateOnly = @('status', 'reset-failed')
+if ($DryRun -and $stateOnly -notcontains $Command) { $cliArgs += '--dry-run' }
+if ($Limit -gt 0 -and $stateOnly -notcontains $Command) { $cliArgs += @('--limit', "$Limit") }
+if ($VerboseLogs -and $stateOnly -notcontains $Command) { $cliArgs += '--verbose' }
 
 Set-Location -LiteralPath $repoRoot
 & $pythonPath @cliArgs

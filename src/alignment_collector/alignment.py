@@ -96,7 +96,11 @@ class AlignmentClient:
             self._token = None
             await self._login()
             response = await self._upload_once(document, pdf_path, filename)
-        if response.status_code == 400 and document.law_year is not None:
+        if (
+            response.status_code == 400
+            and document.law_year is not None
+            and "lawyear" in _error_message(response).casefold()
+        ):
             LOGGER.warning("Alignment API menolak metadata lawYear multipart; retry tanpa lawYear")
             response = await self._upload_once(
                 document,

@@ -28,8 +28,13 @@ def legal_hierarchy_rank(item: SearchItem) -> int | None:
         return 4
     if _contains(
         text,
+        # JDIHN memakai "PERATURAN/KEPUTUSAN KEMENTERIAN" pada regulationType, bukan
+        # "peraturan menteri", sehingga varian itu harus ikut dikenali. "PERATURAN
+        # LEMBAGA PEMERINTAH NON KEMENTERIAN" tetap tidak cocok karena bukan frasa
+        # yang berdampingan.
         r"\b(?:peraturan presiden|perpres|keputusan presiden|keppres|"
-        r"peraturan menteri|permen\w*)\b",
+        r"peraturan menteri|keputusan menteri|permen\w*|kepmen\w*|"
+        r"peraturan kementerian|keputusan kementerian)\b",
     ):
         return 5
     is_provincial_regulation = _contains(
