@@ -81,6 +81,17 @@ def incremental(
     _run("incremental", dry_run, limit, verbose)
 
 
+@app.command("reset-failed")
+def reset_failed() -> None:
+    """Jadikan dokumen FAILED_PERMANENT dapat dicoba ulang pada run berikutnya."""
+    settings = _settings()
+    state = StateStore(settings.state_db_path)
+    state.initialize()
+    typer.echo(
+        json.dumps({"reset": state.reset_permanent_failures()}, ensure_ascii=False, indent=2)
+    )
+
+
 @app.command()
 def status() -> None:
     """Tampilkan ringkasan state collector lokal."""

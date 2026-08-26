@@ -53,17 +53,19 @@ class JdihnClient:
     async def _get(self, path: str, params: dict[str, str] | None = None) -> str:
         if path.startswith("/search-api"):
             raise ValueError("Endpoint /search-api/ tidak boleh digunakan")
-        if self._has_requested:
-            await asyncio.sleep(self._delay)
-        self._has_requested = True
-
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(3),
-            wait=wait_exponential(multiplier=1, min=1, max=8),
+            wait=wait_exponential(multiplier=2, min=2, max=30),
             retry=retry_if_exception_type((httpx.TransportError, JdihnRequestError)),
             reraise=True,
         ):
             with attempt:
+                # Jeda kesopanan berlaku untuk setiap percobaan, termasuk retry. Kalau
+                # hanya dipasang sebelum loop, retry menembak di jarak backoff saja dan
+                # justru memperparah reset koneksi dari WAF JDIHN.
+                if self._has_requested:
+                    await asyncio.sleep(self._delay)
+                self._has_requested = True
                 if self._use_native_curl:
                     return await self._get_with_native_curl(path, params)
                 response = await self._client.get(f"{self._base_url}{path}", params=params)

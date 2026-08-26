@@ -10,11 +10,38 @@ from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt,
 from .alignment import AlignmentClient, PermanentUploadError, RetryableUploadError
 from .config import CollectorSettings
 from .jdihn import JdihnClient, JdihnRequestError, ParseError
-from .models import DocumentState, RunSummary, SearchItem, SourceDocument, UploadResult
+from .models import (
+    DocumentState,
+    DownloadedPdf,
+    RunSummary,
+    SearchItem,
+    SourceDocument,
+    UploadResult,
+)
 from .pdf import PdfDownloader, PdfDownloadError
 from .state import StateStore
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _error_text(error: BaseException) -> str:
+    """Pesan error yang selalu informatif.
+
+    httpx membungkus kegagalan TLS dan koneksi dalam exception yang `str()`-nya kerap
+    kosong, sehingga error_message di SQLite ikut kosong dan kegagalan menjadi tidak bisa
+    didiagnosis sama sekali. Penyebab aslinya sering berada dua lapis lebih dalam
+    (httpx -> httpcore -> OSError), jadi rantai `__cause__` ditelusuri sampai ketemu
+    pesan yang benar-benar berisi.
+    """
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = " ".join(str(current).split())
+        if message:
+            return message if current is error else f"{type(error).__name__}: {message}"
+        current = current.__cause__ or current.__context__
+    return type(error).__name__
 
 
 def _stub_document(item: SearchItem, base_url: str) -> SourceDocument:
@@ -88,33 +115,35 @@ class CollectorService:
                             item, self._settings.keywords, self._settings.exclude_keywords
                         )
                     except (httpx.TransportError, JdihnRequestError) as error:
+                        message = _error_text(error)
                         summary.failed += 1
                         if not dry_run:
-                            self._state.record(
+                            self._state.record_fetch_failure(
                                 _stub_document(item, self._settings.jdihn_base_url),
                                 DocumentState.FAILED_RETRYABLE,
                                 error_code="JDIHN_NETWORK_ERROR",
-                                error_message=str(error),
-                                increment_attempts=True,
+                                error_message=message,
                             )
                         LOGGER.warning(
                             "Gagal mengambil detail JDIHN source_id=%s, "
                             "lanjut kandidat berikutnya: %s",
                             item.source_id,
-                            error,
+                            message,
                         )
                         continue
                     except ParseError as error:
+                        message = _error_text(error)
                         summary.failed += 1
                         if not dry_run:
-                            self._state.record(
+                            self._state.record_fetch_failure(
                                 _stub_document(item, self._settings.jdihn_base_url),
                                 DocumentState.PARSE_FAILED,
                                 error_code="JDIHN_PARSE_ERROR",
-                                error_message=str(error),
-                                increment_attempts=True,
+                                error_message=message,
                             )
-                        LOGGER.error("Gagal parsing JDIHN source_id=%s: %s", item.source_id, error)
+                        LOGGER.error(
+                            "Gagal parsing JDIHN source_id=%s: %s", item.source_id, message
+                        )
                         continue
 
                     if not document.matched_keywords:
@@ -218,32 +247,76 @@ class CollectorService:
                     result.document_id,
                 )
         except RetryableUploadError as error:
-            summary.failed += 1
-            self._state.record(
+            self._fail(
                 document,
+                summary,
                 DocumentState.FAILED_RETRYABLE,
-                pdf_sha256=downloaded.sha256 if downloaded else None,
-                error_code="ALIGNMENT_RETRYABLE",
-                error_message=str(error),
-                increment_attempts=True,
+                "ALIGNMENT_RETRYABLE",
+                error,
+                downloaded,
             )
-        except (PdfDownloadError, PermanentUploadError, httpx.HTTPStatusError) as error:
-            summary.failed += 1
-            self._state.record(
+        except httpx.HTTPStatusError as error:
+            # 5xx dan 429 dari server sumber bersifat sementara. Menandainya permanen
+            # membuat dokumen tidak pernah dicoba lagi, karena FAILED_PERMANENT tidak
+            # ikut di-retry pada run berikutnya.
+            status_code = error.response.status_code
+            retryable = status_code == 429 or status_code >= 500
+            self._fail(
                 document,
+                summary,
+                DocumentState.FAILED_RETRYABLE if retryable else DocumentState.FAILED_PERMANENT,
+                f"PDF_HTTP_{status_code}",
+                error,
+                downloaded,
+            )
+        except (PdfDownloadError, PermanentUploadError) as error:
+            self._fail(
+                document,
+                summary,
                 DocumentState.FAILED_PERMANENT,
-                pdf_sha256=downloaded.sha256 if downloaded else None,
-                error_code=type(error).__name__,
-                error_message=str(error),
-                increment_attempts=True,
+                type(error).__name__,
+                error,
+                downloaded,
             )
         except httpx.TransportError as error:
-            summary.failed += 1
-            self._state.record(
+            self._fail(
                 document,
+                summary,
                 DocumentState.FAILED_RETRYABLE,
-                pdf_sha256=downloaded.sha256 if downloaded else None,
-                error_code=("ALIGNMENT_NETWORK_ERROR" if downloaded else "PDF_NETWORK_ERROR"),
-                error_message=str(error),
-                increment_attempts=True,
+                "ALIGNMENT_NETWORK_ERROR" if downloaded else "PDF_NETWORK_ERROR",
+                error,
+                downloaded,
             )
+
+    def _fail(
+        self,
+        document: SourceDocument,
+        summary: RunSummary,
+        status: DocumentState,
+        error_code: str,
+        error: BaseException,
+        downloaded: DownloadedPdf | None,
+    ) -> None:
+        """Catat kegagalan ke state sekaligus ke log.
+
+        Sebelumnya cabang except hanya menulis ke SQLite, sehingga satu-satunya jalur yang
+        benar-benar mengunduh dan mengunggah justru tidak meninggalkan jejak di log dan
+        ringkasan run melaporkan kegagalan tanpa satu pun keterangan penyebabnya.
+        """
+        message = _error_text(error)
+        summary.failed += 1
+        self._state.record(
+            document,
+            status,
+            pdf_sha256=downloaded.sha256 if downloaded else None,
+            error_code=error_code,
+            error_message=message,
+            increment_attempts=True,
+        )
+        LOGGER.error(
+            "Gagal memproses source_id=%s status=%s code=%s: %s",
+            document.source_id,
+            status.value,
+            error_code,
+            message,
+        )

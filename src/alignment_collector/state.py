@@ -168,6 +168,68 @@ class StateStore:
                 ),
             )
 
+    def record_fetch_failure(
+        self,
+        document: SourceDocument,
+        status: DocumentState,
+        *,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        """Catat kegagalan yang terjadi sebelum halaman detail berhasil di-parse.
+
+        Baris yang sudah ada hanya diperbarui pada kolom error dan attempts. Status serta
+        fingerprint hasil parse sengaja dipertahankan: stub document memakai rumus
+        fingerprint yang berbeda, sehingga menimpanya akan memicu SOURCE_CHANGED palsu dan
+        menurunkan status dokumen yang sebelumnya sudah berhasil diunggah.
+        """
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO source_documents(
+                    source_id, source_url, title, fingerprint, attachment_url,
+                    matched_keywords, status, pdf_sha256, target_document_id,
+                    attempts, error_code, error_message, first_seen_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?, ?, ?, ?)
+                ON CONFLICT(source_id) DO UPDATE SET
+                    attempts = source_documents.attempts + 1,
+                    error_code = excluded.error_code,
+                    error_message = excluded.error_message,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    document.source_id,
+                    document.source_url,
+                    document.title,
+                    document.fingerprint,
+                    document.attachment_url,
+                    json.dumps(document.matched_keywords, ensure_ascii=False),
+                    status.value,
+                    error_code,
+                    error_message[:500],
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+    def reset_permanent_failures(self) -> int:
+        """Kembalikan dokumen FAILED_PERMANENT agar dicoba ulang pada run berikutnya."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE source_documents
+                SET status = ?, error_code = NULL, error_message = NULL, updated_at = ?
+                WHERE status = ?
+                """,
+                (
+                    DocumentState.FAILED_RETRYABLE.value,
+                    _now(),
+                    DocumentState.FAILED_PERMANENT.value,
+                ),
+            )
+            return cursor.rowcount
+
     def status_counts(self) -> Mapping[str, int]:
         with self._connect() as connection:
             rows = connection.execute(

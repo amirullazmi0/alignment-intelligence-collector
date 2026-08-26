@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.7,<3",
     "selectolax>=0.3.28,<1",
     "tenacity>=9,<10",
+    "truststore>=0.10,<1",
     "typer>=0.15,<1",
 ]
 
