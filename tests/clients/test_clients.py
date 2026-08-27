@@ -6,11 +6,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from alignment_collector.alignment import AlignmentClient
-from alignment_collector.config import CollectorSettings
-from alignment_collector.jdihn import JdihnClient, JdihnRequestError
-from alignment_collector.models import SourceDocument
-from alignment_collector.pdf import PdfDownloader, PdfDownloadError, UnsafePdfUrlError
+from app.clients.alignment import AlignmentClient
+from app.clients.jdihn import JdihnClient, JdihnRequestError
+from app.clients.pdf import PdfDownloader, PdfDownloadError, UnsafePdfUrlError
+from app.config import CollectorSettings
+from app.domain.models import SourceDocument
 
 
 def _flight_html(payload: str) -> str:
@@ -133,7 +133,7 @@ async def test_pdf_download_validates_magic_bytes(
     async def allow_test_host(_url: str) -> None:
         return None
 
-    monkeypatch.setattr("alignment_collector.pdf._validate_public_https_url", allow_test_host)
+    monkeypatch.setattr("app.clients.pdf._validate_public_https_url", allow_test_host)
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, headers={"content-type": "application/pdf"}, content=b"not-pdf")
@@ -162,7 +162,7 @@ async def test_pdf_download_persists_in_configured_directory(
     async def allow_test_host(_url: str) -> None:
         return None
 
-    monkeypatch.setattr("alignment_collector.pdf._validate_public_https_url", allow_test_host)
+    monkeypatch.setattr("app.clients.pdf._validate_public_https_url", allow_test_host)
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(

@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from alignment_collector.models import SearchItem
-from alignment_collector.parsing import ParseError, parse_detail_page, parse_search_page
+from app.clients.parsing import ParseError, parse_detail_page, parse_search_page
+from app.domain.models import SearchItem
 
 
 def _flight_html(payload: str) -> str:

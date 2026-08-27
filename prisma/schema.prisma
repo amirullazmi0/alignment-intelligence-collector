@@ -1,0 +1,129 @@
+// Schema database milik aplikasi collector JDIHN.
+//
+// Prisma di sini hanya bertugas sebagai pemilik schema dan migration. Saat runtime,
+// backend FastAPI membaca dan menulis tabel-tabel ini langsung lewat asyncpg tanpa
+// menyentuh Prisma Client sama sekali -- pola yang sama dengan alignment-intelligence-python
+// terhadap database aplikasi utama. Node hanya dibutuhkan ketika menjalankan migrate.
+//
+// Database ini terpisah dari database Alignment Intelligence. Collector tetap mengunggah
+// dokumen ke API utama lewat HTTP, bukan dengan menulis langsung ke database utama.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RunTrigger {
+  MANUAL
+  CRON
+}
+
+enum RunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+enum DocumentState {
+  DISCOVERED
+  SKIPPED_NO_PDF
+  UPLOADED
+  DUPLICATE
+  FAILED_RETRYABLE
+  FAILED_PERMANENT
+  PARSE_FAILED
+  SOURCE_CHANGED
+}
+enum LegalHierarchy {
+  UUD_1945
+  TAP_MPR
+  UU_PERPU
+  PERATURAN_PEMERINTAH
+  PERPRES_KEPPRES_PERMEN
+  PERDA_PROVINSI
+  PERDA_KABUPATEN_KOTA
+}
+model MinistrySchedule {
+  id            String   @id @default(uuid()) @db.Uuid
+  ministry      String   @unique
+  ministryLabel String   @map("ministry_label")
+  aliases       String[] @default([])
+  keywords      String[] @default([])
+  cronExpression String  @map("cron_expression")
+  timezone      String   @default("Asia/Jakarta")
+  documentLimit Int      @default(10) @map("document_limit")
+  dryRun        Boolean  @default(false) @map("dry_run")
+  isActive      Boolean  @default(true) @map("is_active")
+  lastRunAt     DateTime? @map("last_run_at") @db.Timestamptz(3)
+  nextRunAt     DateTime? @map("next_run_at") @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  runs CollectorRun[]
+
+  @@index([isActive, nextRunAt])
+  @@map("ministry_schedules")
+}
+
+model CollectorRun {
+  id            String     @id @default(uuid()) @db.Uuid
+  scheduleId    String?    @map("schedule_id") @db.Uuid
+  ministry      String
+  ministryLabel String     @map("ministry_label")
+  keywords      String[]   @default([])
+  trigger       RunTrigger @default(MANUAL)
+  status        RunStatus  @default(QUEUED)
+  dryRun        Boolean    @default(false) @map("dry_run")
+  documentLimit Int?       @map("document_limit")
+  startedAt     DateTime?  @map("started_at") @db.Timestamptz(3)
+  finishedAt    DateTime?  @map("finished_at") @db.Timestamptz(3)
+  summary       Json?
+  errorMessage  String?    @map("error_message")
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  schedule MinistrySchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  logs     CollectorRunLog[]
+
+  @@index([status, createdAt])
+  @@index([ministry, createdAt])
+  @@map("collector_runs")
+}
+model CollectorRunLog {
+  id      BigInt   @id @default(autoincrement())
+  runId   String   @map("run_id") @db.Uuid
+  ts      DateTime @db.Timestamptz(3)
+  level   String
+  logger  String
+  message String
+
+  run CollectorRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, id])
+  @@map("collector_run_logs")
+}
+model SourceDocument {
+  sourceId         String          @id @map("source_id")
+  sourceUrl        String          @map("source_url")
+  title            String
+  fingerprint      String
+  attachmentUrl    String?         @map("attachment_url")
+  institution      String?
+  legalHierarchy   LegalHierarchy? @map("legal_hierarchy")
+  matchedKeywords  String[]        @default([]) @map("matched_keywords")
+  status           DocumentState
+  pdfSha256        String?         @map("pdf_sha256")
+  targetDocumentId String?         @map("target_document_id")
+  attempts         Int             @default(0)
+  errorCode        String?         @map("error_code")
+  errorMessage     String?         @map("error_message")
+  firstSeenAt      DateTime        @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status])
+  @@index([institution])
+  @@map("source_documents")
+}
