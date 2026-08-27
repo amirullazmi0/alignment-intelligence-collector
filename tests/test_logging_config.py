@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from alignment_collector.logging_config import LevelColorFormatter, should_use_color
+from app.logging_config import LevelColorFormatter, should_use_color
 
 
 def test_color_formatter_matches_existing_python_service() -> None:

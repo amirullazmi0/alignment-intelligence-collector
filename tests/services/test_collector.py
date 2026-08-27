@@ -6,12 +6,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from alignment_collector.alignment import AlignmentClient, PermanentUploadError
-from alignment_collector.config import CollectorSettings
-from alignment_collector.models import DocumentState, RunSummary, SourceDocument
-from alignment_collector.pdf import PdfDownloader
-from alignment_collector.service import CollectorService, _error_text
-from alignment_collector.state import StateStore
+from app.clients.alignment import AlignmentClient, PermanentUploadError
+from app.clients.pdf import PdfDownloader
+from app.config import CollectorSettings
+from app.domain.models import DocumentState, RunSummary, SourceDocument
+from app.services.collector import CollectorService, _error_text
+from app.storage.state import StateStore, StoredDocument
 
 
 def _document() -> SourceDocument:
@@ -31,10 +31,56 @@ def _document() -> SourceDocument:
     )
 
 
-def _settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> CollectorSettings:
-    monkeypatch.setenv("COLLECTOR_TOPIC", "usaha")
-    monkeypatch.setenv("STATE_DB_PATH", str(tmp_path / "state.sqlite3"))
-    return CollectorSettings(_env_file=None)
+def _settings() -> CollectorSettings:
+    return CollectorSettings(
+        _env_file=None,
+        COLLECTOR_TOPIC="usaha",
+        DATABASE_URL="postgresql://localhost/tidak-dipakai",
+    )
+
+
+class RecordingStateStore(StateStore):
+    """StateStore tiruan yang menyimpan di memori.
+
+    Test ini menguji klasifikasi kegagalan dan logging milik CollectorService, bukan SQL
+    di lapisan penyimpanan, jadi tidak perlu database sungguhan.
+    """
+
+    def __init__(self) -> None:  # tidak memanggil super(): tidak ada koneksi yang dipakai
+        self.records: list[tuple[str, DocumentState, str | None]] = []
+
+    async def verify_schema(self) -> None:
+        return None
+
+    async def get(self, source_id: str) -> StoredDocument | None:
+        return None
+
+    async def record(
+        self,
+        document: SourceDocument,
+        status: DocumentState,
+        *,
+        pdf_sha256: str | None = None,
+        target_document_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        increment_attempts: bool = False,
+    ) -> None:
+        self.records.append((document.source_id, status, error_code))
+
+    async def record_fetch_failure(
+        self,
+        document: SourceDocument,
+        status: DocumentState,
+        *,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        self.records.append((document.source_id, status, error_code))
+
+    @property
+    def last_status(self) -> DocumentState:
+        return self.records[-1][1]
 
 
 def test_error_text_falls_back_when_str_is_empty() -> None:
@@ -59,21 +105,20 @@ async def test_source_server_error_is_retryable_and_logged(
     async def allow_test_host(_url: str) -> None:
         return None
 
-    monkeypatch.setattr("alignment_collector.pdf._validate_public_https_url", allow_test_host)
+    monkeypatch.setattr("app.clients.pdf._validate_public_https_url", allow_test_host)
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
 
-    settings = _settings(monkeypatch, tmp_path)
-    state = StateStore(settings.state_db_path)
-    state.initialize()
+    settings = _settings()
+    state = RecordingStateStore()
     service = CollectorService(settings, state)
     summary = RunSummary(mode="backfill", dry_run=False)
     document = _document()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         downloader = PdfDownloader(5, 1024, http_client, tmp_path)
-        with caplog.at_level(logging.ERROR, logger="alignment_collector.service"):
+        with caplog.at_level(logging.ERROR, logger="app.services.collector"):
             await service._process_document(
                 document,
                 downloader,
@@ -81,9 +126,7 @@ async def test_source_server_error_is_retryable_and_logged(
                 summary,
             )
 
-    stored = state.get("42")
-    assert stored is not None
-    assert stored.status == DocumentState.FAILED_RETRYABLE
+    assert state.last_status == DocumentState.FAILED_RETRYABLE
     assert summary.failed == 1
     assert "PDF_HTTP_500" in caplog.text
     assert "source_id=42" in caplog.text
@@ -96,15 +139,14 @@ async def test_download_failure_is_written_to_the_log(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Kegagalan permanen pun harus meninggalkan jejak, bukan hanya baris di SQLite."""
-    settings = _settings(monkeypatch, tmp_path)
-    state = StateStore(settings.state_db_path)
-    state.initialize()
+    settings = _settings()
+    state = RecordingStateStore()
     service = CollectorService(settings, state)
     summary = RunSummary(mode="backfill", dry_run=False)
 
     async with httpx.AsyncClient() as http_client:
         downloader = PdfDownloader(5, 1024, http_client, tmp_path)
-        with caplog.at_level(logging.ERROR, logger="alignment_collector.service"):
+        with caplog.at_level(logging.ERROR, logger="app.services.collector"):
             await service._process_document(
                 _document(),
                 downloader,
@@ -112,9 +154,7 @@ async def test_download_failure_is_written_to_the_log(
                 summary,
             )
 
-    stored = state.get("42")
-    assert stored is not None
-    assert stored.status == DocumentState.FAILED_PERMANENT
+    assert state.last_status == DocumentState.FAILED_PERMANENT
     assert "UnsafePdfUrlError" in caplog.text
 
 

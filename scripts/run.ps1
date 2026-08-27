@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('backfill', 'incremental', 'status', 'reset-failed')]
+    [ValidateSet('backfill', 'incremental', 'status', 'reset-failed', 'import-sqlite', 'seed-schedules')]
     [string]$Command = 'backfill',
     [switch]$DryRun,
     [ValidateRange(1, [int]::MaxValue)]
@@ -16,8 +16,8 @@ if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
     throw 'Virtual environment belum tersedia. Jalankan: yarn setup'
 }
 
-$cliArgs = @('-m', 'alignment_collector', $Command)
-$stateOnly = @('status', 'reset-failed')
+$cliArgs = @('-m', 'app', $Command)
+$stateOnly = @('status', 'reset-failed', 'import-sqlite', 'seed-schedules')
 if ($DryRun -and $stateOnly -notcontains $Command) { $cliArgs += '--dry-run' }
 if ($Limit -gt 0 -and $stateOnly -notcontains $Command) { $cliArgs += @('--limit', "$Limit") }
 if ($VerboseLogs -and $stateOnly -notcontains $Command) { $cliArgs += '--verbose' }

@@ -1,85 +1,127 @@
 # Alignment Intelligence Collector
 
-Python CLI untuk menemukan peraturan bertema di JDIHN dan mengunggah PDF-nya ke
-Knowledge Library Alignment Intelligence. Collector berjalan melalui HTTP tanpa
-browser automation dan menyimpan checkpoint lokal di SQLite.
+Backend pengumpul regulasi JDIHN: menyusuri pencarian publik JDIHN, mengunduh PDF
+lampirannya, lalu mengunggahnya ke Knowledge Library Alignment Intelligence. Berjalan
+tanpa browser automation, dengan checkpoint di PostgreSQL.
 
-## Setup Windows
+Aplikasi ini dipakai lewat dua jalur:
+
+- **CLI**, untuk sekali jalan dari terminal.
+- **HTTP service**, yang menyediakan API jadwal cron per kementerian dan stream log
+  langsung. Antarmukanya ada di repo terpisah `alignment-intelligence-cron`.
+
+## Setup
 
 ```powershell
 yarn setup
+yarn install
 Copy-Item .env.example .env
 ```
 
-Isi `ALIGNMENT_EMAIL` dan `ALIGNMENT_PASSWORD` sendiri di `.env`. File tersebut
-diabaikan Git dan secret tidak pernah ditampilkan di log. Login collector memakai
-mekanisme sesi yang sama dengan dashboard; untuk penggunaan rutin gunakan akun
-collector khusus agar refresh token akun browser tidak saling menggantikan.
+Isi `.env`, lalu siapkan databasenya:
 
-Tema dipilih melalui environment:
-
-```env
-COLLECTOR_TOPIC=pendidikan
-COLLECTOR_KEYWORDS=pendidikan,sekolah,guru,dosen,universitas
+```powershell
+yarn db:deploy
 ```
 
-`COLLECTOR_TOPIC` otomatis menjadi keyword. Tambahkan sinonim pada
-`COLLECTOR_KEYWORDS` untuk memperluas cakupan. MVP hanya mengambil kategori
-`peraturan` yang memiliki lampiran PDF. Kandidat diprioritaskan berdasarkan hierarki
-UUD 1945, TAP MPR, UU/Perpu, PP, Perpres/Keppres/Permen, lalu Perda Provinsi.
-Peraturan universitas/rektor serta Perda kabupaten/kota tidak dikumpulkan.
+Prisma di sini **hanya pemilik schema dan migration**. Saat runtime, tabelnya dibaca dan
+ditulis langsung lewat `asyncpg`; tidak ada Prisma Client yang dipakai. Node hanya
+dibutuhkan ketika menjalankan migrate.
+
+Kalau sebelumnya sudah pernah memakai versi SQLite, pindahkan checkpoint lamanya sekali:
+
+```powershell
+yarn import-sqlite
+```
+
+Tanpa langkah itu, dokumen yang sudah pernah dikumpulkan akan dianggap baru dan diunggah
+ulang.
 
 ## Menjalankan
 
-Mulai dengan preview yang tidak login, download, atau upload:
+### Sebagai service
 
 ```powershell
-yarn backfill:dry
+yarn serve
 ```
 
-Pada run upload aktual, PDF disimpan permanen di folder `downloads/` dalam repo.
-Folder ini diabaikan Git dan dapat diubah melalui `DOWNLOAD_DIR` menggunakan path relatif.
+Service mendengarkan di `COLLECTOR_SERVICE_PORT` (default 5003) dan sekaligus menjalankan
+scheduler cron-nya. Endpoint utamanya:
 
-Lakukan smoke upload satu dokumen:
+| Endpoint | Fungsi |
+|---|---|
+| `GET /health` | status service, panjang antrean, run yang sedang berjalan |
+| `GET /v1/ministries` | 49 kementerian beserta penulisan `instansi` milik JDIHN |
+| `GET/POST /v1/schedules` | daftar dan buat jadwal cron |
+| `PATCH/DELETE /v1/schedules/{id}` | ubah dan hapus jadwal |
+| `POST /v1/schedules/{id}/run` | jalankan satu jadwal sekarang |
+| `GET /v1/runs` | riwayat run |
+| `GET /v1/runs/{id}` | detail run beserta lognya |
+| `GET /v1/runs/{id}/events` | stream log langsung (SSE) |
+
+**Satu run pada satu waktu.** Cron tidak menjalankan run secara langsung; ia membuat baris
+run lalu menitipkannya ke antrean yang dikerjakan satu per satu. Ini bukan soal kerapian:
+JDIHN memutus koneksi kalau diberondong, dan handler log dipasang pada logger paket yang
+dipakai bersama sehingga dua run bersamaan akan saling mencampur keluarannya.
+
+### Sebagai CLI
 
 ```powershell
-.\scripts\run.ps1 -Command backfill -Limit 1
-```
-
-Command lain:
-
-```powershell
+yarn backfill:dry                                             # pratinjau, tanpa unggah
+.\scripts\run.ps1 -Command backfill -Limit 1                  # satu dokumen saja
 yarn backfill
 yarn incremental
-yarn incremental:dry
 yarn status
 yarn reset-failed
 yarn validate
 ```
 
-Dokumen yang gagal dengan sebab sementara (timeout, reset koneksi, HTTP 5xx atau 429
-dari JDIH sumber) ditandai `FAILED_RETRYABLE` dan otomatis dicoba lagi pada run
-berikutnya. Sebab yang tidak akan membaik sendiri — host lampiran sudah mati, URL bukan
-HTTPS, atau isinya ternyata bukan PDF — ditandai `FAILED_PERMANENT` dan tidak pernah
-dicoba ulang. Gunakan `yarn reset-failed` untuk mengembalikan seluruh dokumen
-`FAILED_PERMANENT` menjadi `FAILED_RETRYABLE`, misalnya setelah JDIH sumber memperbaiki
-lampirannya. Setiap kegagalan selalu ditulis ke log berikut `source_id`, status, kode,
-dan pesan penyebabnya.
+Opsi `--ministry` dan `--keywords` tersedia pada `backfill` dan `incremental`. Tanpa
+`--ministry`, keyword diambil dari `COLLECTOR_TOPIC`/`COLLECTOR_KEYWORDS` di `.env`.
 
-`backfill` dan `incremental` mengulang targeted search publik untuk setiap keyword.
-JDIHN membatasi hasil pencarian, sehingga collector ini tidak mengklaim menyalin
-seluruh arsip. Source ID yang sudah selesai dilewati berdasarkan
-`.data/collector.sqlite3`; source lama yang berubah ditandai `SOURCE_CHANGED` dan
-tidak diunggah otomatis.
+## Cara kerja pemilihan dokumen
+
+Nama kementerian otomatis menjadi keyword pencarian. Dokumen yang `instansi`-nya cocok
+diproses lebih dulu; dokumen tingkat nasional lain yang cocok keyword tetap ikut sampai
+`MAX_UPLOADS_PER_RUN` terpenuhi. Peraturan daerah kabupaten/kota dan peraturan
+universitas/rektor dibuang oleh filter hierarki.
+
+Kandidat diurutkan menurut hierarki UUD 1945, TAP MPR, UU/Perpu, PP,
+Perpres/Keppres/Permen, lalu Perda Provinsi.
+
+### Batasan yang perlu diketahui
+
+- JDIHN membatasi hasil pencarian sekitar **100 dokumen per keyword**, dan halaman
+  pencarian yang server-rendered mengabaikan parameter paginasi maupun filter instansi.
+  Jadi satu run mengumpulkan puluhan dokumen, bukan seluruh arsip sebuah kementerian.
+  Menambah keyword adalah satu-satunya cara memperluas cakupan.
+- Angka `skipped_existing` yang besar pada run kedua adalah perilaku normal, bukan
+  kegagalan: dokumen yang pernah dikumpulkan tidak diunggah ulang.
+- Sebagian besar kegagalan berasal dari JDIH sumber yang mati atau menolak koneksi,
+  bukan dari collector. Kegagalan sementara ditandai `FAILED_RETRYABLE` dan otomatis
+  dicoba lagi; sebab yang tidak akan membaik sendiri ditandai `FAILED_PERMANENT` dan
+  hanya dicoba ulang lewat `yarn reset-failed`.
+
+## Daftar kementerian
+
+Ada di `src/alignment_collector/ministries.py`, berisi 49 kementerian beserta alias
+penulisannya. Alias bukan hiasan: JDIHN punya salah ketik "Kementerian" ganda, mengeja
+"Pelindungan" untuk Pekerja Migran, dan masih menyimpan nomenklatur sebelum perombakan
+kabinet 2024.
+
+Perbarui daftar itu setelah kabinet berubah. Sinyal bahwa ia usang datang sendiri:
+collector menulis WARNING ketika sebuah kementerian tidak mendapat satu pun kandidat, dan
+`ministry_matched` pada ringkasan run akan nol.
 
 ## Safety
 
-- Tidak mengakses endpoint `/search-api/` yang dilarang oleh robots.txt JDIHN.
-- Pada Windows, request halaman JDIHN memakai `curl.exe` native karena WAF JDIHN
-  memutus TLS fingerprint OpenSSL Python; certificate verification tetap aktif dan
-  hanya revocation lookup Schannel yang dilewati.
-- Hanya mengunduh URL HTTPS publik; private, loopback, link-local, dan reserved IP ditolak.
-- Downloader memakai system certificate store melalui `truststore`; verifikasi TLS tetap aktif.
-- PDF dibatasi 50 MB serta divalidasi melalui MIME type dan signature `%PDF-`.
-- Tidak menulis ke PostgreSQL atau ImageKit secara langsung dan tidak menghapus dokumen.
-- Upload selalu melewati `POST /api/v1/documents` agar ingestion normal tetap berjalan.
+- Tidak mengakses endpoint `/search-api/` yang dilarang `robots.txt` JDIHN.
+- Pada Windows, request halaman JDIHN memakai `curl.exe` native karena WAF JDIHN memutus
+  TLS fingerprint OpenSSL Python; verifikasi sertifikat tetap aktif dan hanya revocation
+  lookup Schannel yang dilewati.
+- Hanya mengunduh URL HTTPS publik; private, loopback, link-local, dan reserved IP ditolak,
+  dan pemeriksaan itu diulang pada setiap redirect.
+- PDF dibatasi 50 MB serta divalidasi lewat MIME type dan signature `%PDF-`.
+- Tidak menulis ke PostgreSQL Alignment Intelligence maupun ImageKit secara langsung, dan
+  tidak menghapus dokumen. Unggahan selalu melewati `POST /api/v1/documents` agar ingestion
+  normal tetap berjalan.
