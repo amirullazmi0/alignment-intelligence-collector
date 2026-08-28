@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -13,6 +14,40 @@ from ..schemas import ScheduleInput, ScheduleUpdate, paginated
 router = APIRouter(prefix="/v1/schedules", tags=["schedules"])
 
 SCHEDULE_NOT_FOUND = "Jadwal tidak ditemukan"
+
+#: Label jadwal yang cakupannya seluruh JDIHN, bukan satu kementerian.
+GENERAL_LABEL = "Semua kementerian"
+
+
+@dataclass(frozen=True, slots=True)
+class _Target:
+    """Sasaran sebuah jadwal: satu kementerian, atau general bila ministry None."""
+
+    ministry: str | None
+    label: str
+    aliases: tuple[str, ...]
+
+
+def _resolve_target(ministry: str | None, keywords: tuple[str, ...]) -> _Target:
+    """Tentukan sasaran jadwal dari body permintaan.
+
+    Nilai kosong berarti general. Jadwal general wajib punya keyword: tanpa itu ia akan
+    menyusuri seluruh JDIHN tanpa batas apa pun, yang bukan sesuatu yang bisa diselesaikan
+    dalam satu run.
+    """
+    normalized = (ministry or "").strip()
+    if not normalized:
+        if not [word for word in keywords if word.strip()]:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Jadwal general wajib punya minimal satu keyword",
+            )
+        return _Target(ministry=None, label=GENERAL_LABEL, aliases=())
+
+    found = find_ministry(normalized)
+    if found is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Kementerian tidak dikenali")
+    return _Target(ministry=found.value, label=found.label, aliases=found.aliases)
 
 
 def _validated_next_run(cron_expression: str, timezone: str) -> datetime | None:
@@ -41,29 +76,22 @@ async def list_schedules(
     safe_limit = min(max(1, limit), 100)
     repository = get_repository(request)
     items, total = await repository.list_schedules(page=safe_page, limit=safe_limit, search=search)
-    return {
-        **paginated([item.as_dict() for item in items], total, safe_page, safe_limit),
-        # Seluruh kementerian yang sudah punya jadwal, bukan hanya yang tampil di halaman
-        # ini, supaya dropdown pemilih tetap benar saat daftar dipaginasi.
-        "takenMinistries": await repository.taken_ministries(),
-    }
+    # Daftar kementerian yang sudah terpakai tidak lagi dikirim: satu kementerian
+    # boleh punya beberapa jadwal, jadi tidak ada lagi yang perlu disembunyikan
+    # dari pemilihnya.
+    return paginated([item.as_dict() for item in items], total, safe_page, safe_limit)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_schedule(_: Guarded, request: Request, body: ScheduleInput) -> dict[str, object]:
-    ministry = find_ministry(body.ministry)
-    if ministry is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Kementerian tidak dikenali")
+    target = _resolve_target(body.ministry, tuple(body.keywords))
     next_run_at = _validated_next_run(body.cronExpression, body.timezone)
 
     repository = get_repository(request)
-    if await repository.get_schedule_by_ministry(ministry.value) is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Jadwal untuk kementerian ini sudah ada")
-
     schedule = await repository.create_schedule(
-        ministry=ministry.value,
-        ministry_label=ministry.label,
-        aliases=ministry.aliases,
+        ministry=target.ministry,
+        ministry_label=target.label,
+        aliases=target.aliases,
         keywords=tuple(body.keywords),
         cron_expression=body.cronExpression,
         timezone=body.timezone,
