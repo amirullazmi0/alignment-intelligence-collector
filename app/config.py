@@ -25,10 +25,10 @@ class CollectorSettings(BaseSettings):
         default="", validation_alias="COLLECTOR_EXCLUDE_KEYWORDS"
     )
     jdihn_base_url: str = Field(default="https://jdihn.go.id", validation_alias="JDIHN_BASE_URL")
-    alignment_api_base_url: str = Field(
-        default="https://alignment-intelligence-nest.apps.arulize.com",
-        validation_alias="ALIGNMENT_API_BASE_URL",
-    )
+    # Tanpa nilai bawaan: alamat deployment tidak boleh menempel di kode. Default
+    # yang menunjuk ke satu lingkungan membuat konfigurasi yang salah lolos diam-diam
+    # lalu memanggil server yang keliru.
+    alignment_api_base_url: str = Field(default="", validation_alias="ALIGNMENT_API_BASE_URL")
     alignment_email: str = Field(default="", validation_alias="ALIGNMENT_EMAIL")
     alignment_password: SecretStr = Field(
         default=SecretStr(""), validation_alias="ALIGNMENT_PASSWORD"
@@ -64,6 +64,11 @@ class CollectorSettings(BaseSettings):
     @classmethod
     def validate_https_url(cls, value: str) -> str:
         normalized = value.strip().rstrip("/")
+        # Kosong dibiarkan lolos di sini; yang mewajibkannya adalah pemakainya lewat
+        # require_alignment_api_base_url(), supaya perintah yang tidak memerlukan
+        # Alignment tetap bisa dijalankan.
+        if not normalized:
+            return ""
         if "://" not in normalized:
             normalized = f"https://{normalized}"
         parsed = urlparse(normalized)
@@ -120,6 +125,16 @@ class CollectorSettings(BaseSettings):
     @property
     def exclude_keywords(self) -> tuple[str, ...]:
         return _split_csv(self.collector_exclude_keywords)
+
+    def require_alignment_api_base_url(self) -> str:
+        """Alamat API Alignment Intelligence, wajib diisi lewat environment."""
+        url = self.alignment_api_base_url.strip()
+        if not url:
+            raise ValueError(
+                "ALIGNMENT_API_BASE_URL wajib diisi. Setel di .env untuk lokal, atau di "
+                "dashboard CapRover untuk deployment -- berkas .env tidak ikut ke image."
+            )
+        return url
 
     def require_alignment_credentials(self) -> tuple[str, str]:
         email = self.alignment_email.strip()
