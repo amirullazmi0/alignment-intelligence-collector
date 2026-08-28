@@ -71,28 +71,6 @@ class RunRequest:
     ministry_aliases: tuple[str, ...] = ()
 
     @classmethod
-    def from_settings(
-        cls,
-        settings: CollectorSettings,
-        mode: str,
-        *,
-        dry_run: bool,
-        limit: int | None,
-    ) -> RunRequest:
-        keywords = settings.keywords
-        if not keywords:
-            raise ValueError(
-                "COLLECTOR_TOPIC atau COLLECTOR_KEYWORDS wajib diisi untuk run tanpa kementerian"
-            )
-        return cls(
-            mode=mode,
-            dry_run=dry_run,
-            limit=limit,
-            keywords=keywords,
-            exclude_keywords=settings.exclude_keywords,
-        )
-
-    @classmethod
     def for_keywords(
         cls,
         settings: CollectorSettings,
@@ -102,11 +80,11 @@ class RunRequest:
         limit: int | None,
         keywords: tuple[str, ...],
     ) -> RunRequest:
-        """Run general: seluruh JDIHN, dibatasi keyword yang diberikan pengguna.
+        """Run general: seluruh JDIHN, dibatasi keyword yang diberikan pemanggil.
 
-        Berbeda dari `from_settings` yang membaca tema dari `.env`, keyword di sini
-        datang dari jadwalnya sendiri sehingga satu deployment bisa punya beberapa
-        jadwal general dengan tema berbeda-beda.
+        Keyword selalu datang dari jadwal atau argumen CLI, tidak pernah dari `.env`,
+        sehingga satu deployment bisa punya beberapa run general bertema berbeda tanpa
+        saling menyeret tema milik yang lain.
         """
         deduped = _dedupe(keywords)
         if not deduped:
@@ -133,9 +111,9 @@ class RunRequest:
     ) -> RunRequest:
         """Run bertema satu kementerian.
 
-        `COLLECTOR_TOPIC` sengaja tidak ikut digabung: kalau ikut, setiap run kementerian
-        akan selalu menyeret tema lama yang kebetulan tersimpan di `.env`. Sebaliknya
-        `COLLECTOR_EXCLUDE_KEYWORDS` tetap dipakai karena sifatnya pengaman, bukan tema.
+        Nama kementerian selalu menjadi keyword pertama, ditambah keyword milik
+        jadwalnya. `COLLECTOR_EXCLUDE_KEYWORDS` tetap dipakai karena sifatnya pengaman
+        yang berlaku menyeluruh, bukan tema.
         """
         return cls(
             mode=mode,

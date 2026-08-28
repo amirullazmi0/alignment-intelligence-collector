@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -82,11 +82,13 @@ def _build_request(
             ministry=ministry,
             extra_keywords=extra_keywords,
         )
-    request = RunRequest.from_settings(settings, mode, dry_run=dry_run, limit=limit)
+    # Tanpa kementerian, keyword harus disebut eksplisit. Sebelumnya nilai ini
+    # diam-diam diambil dari COLLECTOR_TOPIC di `.env`, sehingga run yang dikira
+    # bertema apa pun sebenarnya selalu memakai tema lama yang tersimpan di sana.
     if not extra_keywords:
-        return request
-    return replace(
-        request, keywords=_split_keywords(",".join((*request.keywords, *extra_keywords)))
+        raise ValueError("Run tanpa --ministry wajib menyertakan --keywords, dipisah koma")
+    return RunRequest.for_keywords(
+        settings, mode, dry_run=dry_run, limit=limit, keywords=extra_keywords
     )
 
 

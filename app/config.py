@@ -19,8 +19,10 @@ class CollectorSettings(BaseSettings):
         case_sensitive=False,
     )
 
-    collector_topic: str = Field(default="", validation_alias="COLLECTOR_TOPIC")
-    collector_keywords: str = Field(default="", validation_alias="COLLECTOR_KEYWORDS")
+    # COLLECTOR_TOPIC dan COLLECTOR_KEYWORDS dihapus: sejak setiap run berasal dari
+    # jadwal yang membawa kementerian dan keyword-nya sendiri, tema tingkat
+    # environment tidak punya tempat lagi dan hanya jadi sumber kebingungan --
+    # nilainya diam-diam ikut terbawa ke run yang sebenarnya bertema lain.
     collector_exclude_keywords: str = Field(
         default="", validation_alias="COLLECTOR_EXCLUDE_KEYWORDS"
     )
@@ -52,13 +54,6 @@ class CollectorSettings(BaseSettings):
     )
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     log_color: str = Field(default="auto", validation_alias="LOG_COLOR")
-
-    @field_validator("collector_topic")
-    @classmethod
-    def validate_topic(cls, value: str) -> str:
-        # Boleh kosong: deployment mode service memilih kementerian per run, sehingga tidak
-        # punya tema tetap. Run tanpa kementerian tetap divalidasi di RunRequest.from_settings.
-        return value.strip()
 
     @field_validator("jdihn_base_url", "alignment_api_base_url")
     @classmethod
@@ -117,10 +112,6 @@ class CollectorSettings(BaseSettings):
         if value.is_absolute() or ".." in value.parts:
             raise ValueError("DOWNLOAD_DIR harus berupa path relatif di dalam repo")
         return value
-
-    @property
-    def keywords(self) -> tuple[str, ...]:
-        return _split_csv(",".join((self.collector_topic, self.collector_keywords)))
 
     @property
     def exclude_keywords(self) -> tuple[str, ...]:

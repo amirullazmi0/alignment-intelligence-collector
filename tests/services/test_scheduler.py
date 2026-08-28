@@ -17,7 +17,6 @@ from app.storage.repository import Run
 def _settings() -> CollectorSettings:
     return CollectorSettings(
         _env_file=None,
-        COLLECTOR_TOPIC="usaha",
         DATABASE_URL="postgresql://localhost/tidak-dipakai",
         ALIGNMENT_PASSWORD=SecretStr("private-value"),
     )
