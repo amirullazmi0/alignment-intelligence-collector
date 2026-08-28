@@ -11,6 +11,12 @@ from .database import Database
 MAX_ERROR_MESSAGE = 2000
 
 
+def _affected(command_tag: str) -> int:
+    """Jumlah baris dari command tag asyncpg, contohnya "UPDATE 12"."""
+    _, _, count = command_tag.rpartition(" ")
+    return int(count) if count.isdigit() else 0
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -391,6 +397,46 @@ class CollectorRepository:
                 _now(),
                 message[:MAX_ERROR_MESSAGE],
             )
+
+    async def recover_interrupted_runs(self, message: str) -> int:
+        """Tandai gagal seluruh run yang masih RUNNING dari proses sebelumnya.
+
+        Antrean eksekutor hanya hidup di memori, jadi sebuah run yang terputus oleh
+        restart tidak akan pernah dilanjutkan siapa pun. Tanpa rekonsiliasi ini
+        barisnya menggantung RUNNING selamanya dan dashboard menghitungnya sebagai
+        pekerjaan aktif yang sebenarnya sudah mati.
+
+        Dipanggil sekali saat startup, jadi ia mengasumsikan hanya ada satu instance
+        collector. Menjalankan dua instance sekaligus akan membuat yang satu
+        menggagalkan run milik yang lain.
+        """
+        async with self._db.acquire() as connection:
+            result = await connection.execute(
+                """
+                UPDATE collector_runs
+                SET status = 'FAILED'::"RunStatus", finished_at = $1, error_message = $2
+                WHERE status = 'RUNNING'::"RunStatus"
+                """,
+                _now(),
+                message[:MAX_ERROR_MESSAGE],
+            )
+        return _affected(result)
+
+    async def pending_run_ids(self) -> list[str]:
+        """Run yang masih QUEUED, terlama lebih dulu.
+
+        Dipakai saat startup untuk memuat ulang antrean memori. Tanpa ini setiap
+        restart meninggalkan baris QUEUED yang tidak akan pernah diambil lagi.
+        """
+        async with self._db.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT id FROM collector_runs
+                WHERE status = 'QUEUED'::"RunStatus"
+                ORDER BY created_at
+                """
+            )
+        return [str(row["id"]) for row in rows]
 
     async def get_run(self, run_id: str) -> Run | None:
         async with self._db.acquire() as connection:

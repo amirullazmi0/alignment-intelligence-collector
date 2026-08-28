@@ -22,6 +22,12 @@ QUEUE_MAXSIZE = 1000
 LOG_FLUSH_SIZE = 25
 HEARTBEAT_SECONDS = 20.0
 
+INTERRUPTED_MESSAGE = (
+    "Run terputus ketika service collector berhenti dan tidak pernah dilanjutkan. "
+    "Antrean eksekutor hanya hidup di memori, jadi run yang sedang berjalan tidak "
+    "bisa disambung kembali setelah restart."
+)
+
 
 class RunBroker:
     """Penyiar kejadian run ke penonton yang sedang terhubung.
@@ -104,6 +110,26 @@ class RunExecutor:
         if self._worker is None:
             self._worker = asyncio.create_task(self._consume())
             LOGGER.info("Antrean run collector siap")
+
+    async def recover(self) -> tuple[int, int]:
+        """Sambung kembali keadaan database dengan antrean yang baru kosong.
+
+        Antrean ini hidup di memori, jadi restart menghapusnya sementara barisnya
+        tetap ada di database. Sebelum rekonsiliasi ini, run yang terputus
+        menggantung RUNNING selamanya dan run yang belum sempat diambil menumpuk
+        sebagai QUEUED yang tak pernah dieksekusi siapa pun.
+
+        Kembalikan (jumlah run yang digagalkan, jumlah run yang diantre ulang).
+        """
+        interrupted = await self._repository.recover_interrupted_runs(INTERRUPTED_MESSAGE)
+        if interrupted:
+            LOGGER.warning("Run yang terputus oleh restart ditandai gagal: %s", interrupted)
+        pending = await self._repository.pending_run_ids()
+        for run_id in pending:
+            await self._queue.put(run_id)
+        if pending:
+            LOGGER.info("Run tertunda dimuat ulang ke antrean: %s", len(pending))
+        return interrupted, len(pending)
 
     async def stop(self) -> None:
         if self._worker is None:
