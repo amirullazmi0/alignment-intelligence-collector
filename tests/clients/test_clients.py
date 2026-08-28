@@ -46,7 +46,6 @@ def test_settings_normalize_jdihn_url(
     configured_url: str,
     expected_url: str,
 ) -> None:
-    monkeypatch.setenv("COLLECTOR_TOPIC", "pendidikan")
     monkeypatch.setenv("JDIHN_BASE_URL", configured_url)
 
     settings = CollectorSettings(_env_file=None)
