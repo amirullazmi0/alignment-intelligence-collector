@@ -7,9 +7,13 @@ from pydantic import BaseModel, Field
 
 
 class ScheduleInput(BaseModel):
-    """Body pembuatan jadwal cron baru."""
+    """Body pembuatan jadwal cron baru.
 
-    ministry: str
+    `ministry` kosong atau tidak dikirim berarti jadwal general: cakupannya
+    seluruh JDIHN dan yang membatasi adalah `keywords`.
+    """
+
+    ministry: str | None = None
     cronExpression: str = Field(default="0 2 * * *")
     timezone: str = "Asia/Jakarta"
     keywords: list[str] = Field(default_factory=list)

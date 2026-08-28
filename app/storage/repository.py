@@ -24,7 +24,8 @@ def _now() -> datetime:
 @dataclass(frozen=True, slots=True)
 class Schedule:
     id: str
-    ministry: str
+    #: None berarti jadwal general yang mencakup seluruh JDIHN.
+    ministry: str | None
     ministry_label: str
     aliases: tuple[str, ...]
     keywords: tuple[str, ...]
@@ -57,7 +58,8 @@ class Schedule:
 class Run:
     id: str
     schedule_id: str | None
-    ministry: str
+    #: None berarti run general yang tidak menyasar satu kementerian tertentu.
+    ministry: str | None
     ministry_label: str
     keywords: tuple[str, ...]
     trigger: str
@@ -192,18 +194,13 @@ class CollectorRepository:
             )
         return [_schedule(row) for row in rows], int(total or 0)
 
-    async def taken_ministries(self) -> list[str]:
-        """Kementerian yang sudah punya jadwal.
-
-        Dikirim terpisah dari daftar berhalaman: dropdown pemilih kementerian harus tahu
-        seluruh yang sudah terpakai, bukan hanya yang kebetulan tampil di halaman ini.
-        """
-        async with self._db.acquire() as connection:
-            rows = await connection.fetch("SELECT ministry FROM ministry_schedules")
-        return [str(row["ministry"]) for row in rows]
-
     async def get_schedule_by_ministry(self, ministry: str) -> Schedule | None:
-        """Dipakai untuk menolak jadwal ganda tanpa harus memuat seluruh daftar."""
+        """Jadwal pertama milik sebuah kementerian.
+
+        Sejak satu kementerian boleh punya beberapa jadwal, ini tidak lagi dipakai untuk
+        menolak duplikat -- hanya untuk seeding, yang perlu tahu apakah kementerian itu
+        sudah pernah dijadwalkan sama sekali.
+        """
         async with self._db.acquire() as connection:
             row = await connection.fetchrow(
                 f"SELECT {SCHEDULE_COLUMNS} FROM ministry_schedules WHERE ministry = $1",
@@ -232,7 +229,7 @@ class CollectorRepository:
     async def create_schedule(
         self,
         *,
-        ministry: str,
+        ministry: str | None,
         ministry_label: str,
         aliases: tuple[str, ...],
         keywords: tuple[str, ...],
@@ -329,7 +326,7 @@ class CollectorRepository:
     async def create_run(
         self,
         *,
-        ministry: str,
+        ministry: str | None,
         ministry_label: str,
         keywords: tuple[str, ...],
         trigger: str,

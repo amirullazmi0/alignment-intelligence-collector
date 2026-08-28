@@ -93,6 +93,33 @@ class RunRequest:
         )
 
     @classmethod
+    def for_keywords(
+        cls,
+        settings: CollectorSettings,
+        mode: str,
+        *,
+        dry_run: bool,
+        limit: int | None,
+        keywords: tuple[str, ...],
+    ) -> RunRequest:
+        """Run general: seluruh JDIHN, dibatasi keyword yang diberikan pengguna.
+
+        Berbeda dari `from_settings` yang membaca tema dari `.env`, keyword di sini
+        datang dari jadwalnya sendiri sehingga satu deployment bisa punya beberapa
+        jadwal general dengan tema berbeda-beda.
+        """
+        deduped = _dedupe(keywords)
+        if not deduped:
+            raise ValueError("Run general wajib punya minimal satu keyword")
+        return cls(
+            mode=mode,
+            dry_run=dry_run,
+            limit=limit,
+            keywords=deduped,
+            exclude_keywords=settings.exclude_keywords,
+        )
+
+    @classmethod
     def for_ministry(
         cls,
         settings: CollectorSettings,

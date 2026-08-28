@@ -236,6 +236,17 @@ def _parse_ts(value: object) -> datetime:
 
 
 def _request_for(settings: CollectorSettings, run: Run) -> RunRequest:
+    # Run general tidak menyasar kementerian mana pun: keyword-nya sendiri yang
+    # menentukan cakupan, dan pencocokan instansi dilewati sepenuhnya.
+    if run.ministry is None:
+        return RunRequest.for_keywords(
+            settings,
+            "backfill",
+            dry_run=run.dry_run,
+            limit=run.document_limit,
+            keywords=tuple(run.keywords),
+        )
+
     ministry = find_ministry(run.ministry)
     return RunRequest.for_ministry(
         settings,
