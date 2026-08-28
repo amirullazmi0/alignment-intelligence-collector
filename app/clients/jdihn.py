@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import shutil
 from dataclasses import replace
 from urllib.parse import urlencode
@@ -38,8 +37,19 @@ class JdihnClient:
         self._delay = request_delay_seconds
         self._timeout_seconds = timeout_seconds
         self._owns_client = client is None
-        self._use_native_curl = client is None and os.name == "nt"
-        self._curl_path = shutil.which("curl.exe") if self._use_native_curl else None
+        # WAF JDIHN memutus TLS fingerprint milik OpenSSL-nya Python, sehingga permintaan
+        # halaman dilempar ke curl bawaan sistem yang memakai tumpukan TLS berbeda.
+        # Pencariannya tidak lagi terbatas Windows: container Linux juga menyediakan curl,
+        # dan httpx adalah jalur yang justru diputus WAF.
+        self._curl_path = (
+            (shutil.which("curl") or shutil.which("curl.exe")) if client is None else None
+        )
+        self._use_native_curl = self._curl_path is not None
+        if client is None and self._curl_path is None:
+            LOGGER.warning(
+                "curl tidak ditemukan pada PATH; permintaan JDIHN memakai httpx dan "
+                "berisiko diputus WAF"
+            )
         self._client = client or httpx.AsyncClient(
             timeout=timeout_seconds,
             follow_redirects=True,

@@ -10,6 +10,7 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:validate": "prisma validate",
+    "deploy:vps": "caprover deploy",
     "format": ".venv\\Scripts\\python.exe -m ruff format .",
     "format:check": ".venv\\Scripts\\python.exe -m ruff format --check .",
     "import-sqlite": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Command import-sqlite",
