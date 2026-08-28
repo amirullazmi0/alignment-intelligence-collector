@@ -165,6 +165,10 @@ class CollectorRepository:
 
         Pencarian mencakup nama kementerian sekaligus keyword tambahannya, sehingga
         jadwal bisa ditemukan lewat tema yang dikumpulkannya, bukan hanya namanya.
+
+        Urutannya jadwal terbaru lebih dulu. Sejak satu kementerian boleh punya beberapa
+        jadwal, urutan menurut nama kementerian membuat jadwal yang baru dibuat terselip
+        di tengah daftar dan sulit dipastikan benar-benar tersimpan.
         """
         needle = search.strip()
         where = ""
@@ -185,7 +189,7 @@ class CollectorRepository:
             rows = await connection.fetch(
                 f"""
                 SELECT {SCHEDULE_COLUMNS} FROM ministry_schedules {where}
-                ORDER BY ministry_label
+                ORDER BY created_at DESC, id
                 LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
                 """,
                 *params,
