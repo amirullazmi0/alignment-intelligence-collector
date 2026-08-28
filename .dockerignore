@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+.venv
+node_modules
+downloads
+.data
+tests
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+*.log
+.idea
+.vscode
