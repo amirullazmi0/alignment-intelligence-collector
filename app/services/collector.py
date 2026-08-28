@@ -96,7 +96,7 @@ class CollectorService:
                     email, password = self._settings.require_alignment_credentials()
                     alignment = await stack.enter_async_context(
                         AlignmentClient(
-                            self._settings.alignment_api_base_url,
+                            self._settings.require_alignment_api_base_url(),
                             email,
                             password,
                             self._settings.http_timeout_seconds,
