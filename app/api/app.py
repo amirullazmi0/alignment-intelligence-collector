@@ -37,6 +37,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler = CollectorScheduler(repository, executor)
 
     await executor.start()
+    # Sebelum cron mulai menambah pekerjaan baru, samakan dulu keadaan database
+    # dengan antrean yang baru saja kosong: run yang terputus restart ditandai
+    # gagal, dan run yang belum sempat diambil dimuat ulang.
+    await executor.recover()
     await scheduler.start()
 
     app.state.database = database
