@@ -14,6 +14,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Server www.jdihn.go.id hanya mengirim sertifikat leaf tanpa intermediate Sectigo DV R36.
+# curl Windows (Schannel) mengambil intermediate sendiri lewat AIA, tetapi curl Linux
+# (OpenSSL) tidak, sehingga gagal dengan "unable to get local issuer certificate".
+# Intermediate dipasang ke trust store sistem; verifikasi sertifikat tetap aktif.
+COPY certs/sectigo-public-server-authentication-ca-dv-r36.crt /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
