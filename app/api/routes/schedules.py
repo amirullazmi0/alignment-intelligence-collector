@@ -98,6 +98,7 @@ async def create_schedule(_: Guarded, request: Request, body: ScheduleInput) -> 
         document_limit=body.documentLimit,
         dry_run=body.dryRun,
         is_active=body.isActive,
+        source=body.source,
     )
     await repository.set_next_run_at(schedule.id, next_run_at)
     await get_scheduler(request).reload()

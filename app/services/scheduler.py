@@ -139,6 +139,7 @@ class CollectorScheduler:
             dry_run=schedule.dry_run,
             document_limit=schedule.document_limit,
             schedule_id=schedule.id,
+            source=schedule.source,
         )
         await self._repository.mark_schedule_ran(
             schedule.id, next_fire_time(schedule.cron_expression, schedule.timezone)

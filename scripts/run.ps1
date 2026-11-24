@@ -5,7 +5,9 @@ param(
     [switch]$DryRun,
     [ValidateRange(1, [int]::MaxValue)]
     [int]$Limit = 0,
-    [switch]$VerboseLogs
+    [switch]$VerboseLogs,
+    [ValidateSet('jdihn', 'pasal')]
+    [string]$Source = 'jdihn'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +23,7 @@ $stateOnly = @('status', 'reset-failed', 'import-sqlite', 'seed-schedules')
 if ($DryRun -and $stateOnly -notcontains $Command) { $cliArgs += '--dry-run' }
 if ($Limit -gt 0 -and $stateOnly -notcontains $Command) { $cliArgs += @('--limit', "$Limit") }
 if ($VerboseLogs -and $stateOnly -notcontains $Command) { $cliArgs += '--verbose' }
+if ($stateOnly -notcontains $Command) { $cliArgs += @('--source', $Source) }
 
 Set-Location -LiteralPath $repoRoot
 & $pythonPath @cliArgs

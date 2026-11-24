@@ -29,6 +29,7 @@ class Schedule:
     ministry_label: str
     aliases: tuple[str, ...]
     keywords: tuple[str, ...]
+    source: str
     cron_expression: str
     timezone: str
     document_limit: int
@@ -44,6 +45,7 @@ class Schedule:
             "ministryLabel": self.ministry_label,
             "aliases": list(self.aliases),
             "keywords": list(self.keywords),
+            "source": self.source,
             "cronExpression": self.cron_expression,
             "timezone": self.timezone,
             "documentLimit": self.document_limit,
@@ -62,6 +64,7 @@ class Run:
     ministry: str | None
     ministry_label: str
     keywords: tuple[str, ...]
+    source: str
     trigger: str
     status: str
     dry_run: bool
@@ -79,6 +82,7 @@ class Run:
             "ministry": self.ministry,
             "ministryLabel": self.ministry_label,
             "keywords": list(self.keywords),
+            "source": self.source,
             "trigger": self.trigger,
             "status": self.status,
             "dryRun": self.dry_run,
@@ -92,12 +96,14 @@ class Run:
 
 
 SCHEDULE_COLUMNS = """
-    id::text, ministry, ministry_label, aliases, keywords, cron_expression, timezone,
+    id::text, ministry, ministry_label, aliases, keywords, source::text, cron_expression,
+    timezone,
     document_limit, dry_run, is_active, last_run_at, next_run_at
 """
 
 RUN_COLUMNS = """
-    id::text, schedule_id::text, ministry, ministry_label, keywords, trigger::text,
+    id::text, schedule_id::text, ministry, ministry_label, keywords, source::text,
+    trigger::text,
     status::text, dry_run, document_limit, started_at, finished_at, summary,
     error_message, created_at
 """
@@ -110,6 +116,7 @@ def _schedule(row: Any) -> Schedule:
         ministry_label=row["ministry_label"],
         aliases=tuple(row["aliases"] or ()),
         keywords=tuple(row["keywords"] or ()),
+        source=row["source"],
         cron_expression=row["cron_expression"],
         timezone=row["timezone"],
         document_limit=row["document_limit"],
@@ -133,6 +140,7 @@ def _run(row: Any) -> Run:
         ministry=row["ministry"],
         ministry_label=row["ministry_label"],
         keywords=tuple(row["keywords"] or ()),
+        source=row["source"],
         trigger=row["trigger"],
         status=row["status"],
         dry_run=row["dry_run"],
@@ -242,6 +250,7 @@ class CollectorRepository:
         document_limit: int,
         dry_run: bool,
         is_active: bool,
+        source: str = "JDIHN",
     ) -> Schedule:
         timestamp = _now()
         async with self._db.acquire() as connection:
@@ -249,9 +258,11 @@ class CollectorRepository:
                 f"""
                 INSERT INTO ministry_schedules (
                     id, ministry, ministry_label, aliases, keywords, cron_expression,
-                    timezone, document_limit, dry_run, is_active, created_at, updated_at
+                    timezone, document_limit, dry_run, is_active, created_at, updated_at,
+                    source
                 ) VALUES (
-                    gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10
+                    gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10,
+                    $11::text::"CollectorSource"
                 )
                 RETURNING {SCHEDULE_COLUMNS}
                 """,
@@ -265,6 +276,7 @@ class CollectorRepository:
                 dry_run,
                 is_active,
                 timestamp,
+                source,
             )
         return _schedule(row)
 
@@ -337,16 +349,17 @@ class CollectorRepository:
         dry_run: bool,
         document_limit: int | None,
         schedule_id: str | None = None,
+        source: str = "JDIHN",
     ) -> Run:
         async with self._db.acquire() as connection:
             row = await connection.fetchrow(
                 f"""
                 INSERT INTO collector_runs (
                     id, schedule_id, ministry, ministry_label, keywords, trigger, status,
-                    dry_run, document_limit, created_at
+                    dry_run, document_limit, created_at, source
                 ) VALUES (
                     gen_random_uuid(), $1::uuid, $2, $3, $4, $5::text::"RunTrigger",
-                    'QUEUED'::"RunStatus", $6, $7, $8
+                    'QUEUED'::"RunStatus", $6, $7, $8, $9::text::"CollectorSource"
                 )
                 RETURNING {RUN_COLUMNS}
                 """,
@@ -358,6 +371,7 @@ class CollectorRepository:
                 dry_run,
                 document_limit,
                 _now(),
+                source,
             )
         return _run(row)
 

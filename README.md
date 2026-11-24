@@ -102,6 +102,46 @@ Perpres/Keppres/Permen, lalu Perda Provinsi.
   dicoba lagi; sebab yang tidak akan membaik sendiri ditandai `FAILED_PERMANENT` dan
   hanya dicoba ulang lewat `yarn reset-failed`.
 
+## Sumber kedua: pasal.id
+
+Setiap jadwal punya `source`: `JDIHN` (bawaan) atau `PASAL_ID`. Untuk CLI:
+`--source pasal` (atau `.\scripts\run.ps1 -Source pasal`).
+
+Sumber `PASAL_ID` bekerja begini:
+
+1. Kandidat dicari lewat API publik `https://pasal.id/api/v1/search`, satu pencarian per
+   keyword per jenis (UU, Perppu, PP, Perpres, Permen, Perda), 20 hasil masing-masing.
+   Untuk jadwal kementerian ditambah pencarian Permen "Peraturan Menteri <nama>".
+   Pencarian pasal.id mencocokkan isi pasal, jadi kandidat dianggap cocok dengan keyword
+   yang menemukannya (judulnya sendiri sering tidak memuat keyword itu).
+2. Untuk jadwal kementerian, pemrakarsa Permen dibaca dari `issuing_body` di
+   `/api/v1/laws/{frbr_uri}`, satu permintaan per slug (`permenkes`, `permenkkp`, ...),
+   karena hasil search tidak memuatnya dan judul Permen sering tanpa nama menterinya.
+3. Detail `/api/v1/laws/{frbr_uri}` memberi `source_url`. Dari sampel, situsnya
+   peraturan.go.id, peraturan.bpk.go.id, atau JDIH kementerian (mis. jdih.kemkes.go.id).
+   Halaman itu dibaca untuk mencari tautan PDF (unduhan langsung lebih dulu, pratinjau
+   `/Read/` dan penjelasan `...pjl.pdf` paling belakang), lalu PDF-nya diunggah dengan
+   `sourceName` "<host> (via pasal.id)".
+
+`source_id` dokumen pasal.id diberi awalan `pasal:` (mis. `pasal:akn/id/act/uu/2003/13`)
+sehingga tidak bertabrakan dengan ID JDIHN. Regulasi yang sama dari dua sumber ditangkap
+Alignment sebagai duplikat lewat hash PDF.
+
+Batasan:
+
+- Wajib `PASAL_API_TOKEN` (gratis, dibuat di <https://pasal.id/akun>). Token ditolak
+  menghentikan run.
+- API pasal.id hanya memberi metadata; teks pasal tidak tersedia lewat API. Ketentuan
+  pasal.id melarang ekstraksi konten otomatis massal tanpa lisensi, jadi collector **tidak
+  pernah** membuka halaman atau PDF pasal.id, hanya API-nya.
+- Rate limit API: search dan detail masing-masing 60/menit dan 360/jam. Jeda bawaan
+  `PASAL_REQUEST_DELAY_SECONDS=1.5`. Satu run kementerian memakai sekitar 7 pencarian per
+  keyword plus satu detail per kandidat yang diperiksa.
+- Hanya `source_url` HTTPS di domain `.go.id` yang dibuka. Di luar itu, atau halamannya
+  tanpa PDF di host yang sama, dokumen dicatat `SKIPPED_NO_PDF`.
+- Filter `type` yang tidak dikenal pasal.id diabaikan diam-diam (mis. `PERDA_PROV` memberi
+  hasil campuran), jadi daftar jenis di `SEARCH_TYPES` harus memakai kode yang benar.
+
 ## Daftar kementerian
 
 Ada di `src/alignment_collector/ministries.py`, berisi 49 kementerian beserta alias

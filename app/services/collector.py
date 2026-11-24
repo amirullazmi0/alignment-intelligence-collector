@@ -3,15 +3,18 @@ from __future__ import annotations
 import hashlib
 import logging
 from contextlib import AsyncExitStack
+from typing import Protocol
 
 import httpx
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..clients.alignment import AlignmentClient, PermanentUploadError, RetryableUploadError
 from ..clients.jdihn import JdihnClient, JdihnRequestError, ParseError
+from ..clients.pasal import SOURCE_ID_PREFIX, PasalClient, PasalRequestError
 from ..clients.pdf import PdfDownloader, PdfDownloadError
 from ..config import CollectorSettings
 from ..domain.models import (
+    CollectorSource,
     DocumentState,
     DownloadedPdf,
     RunRequest,
@@ -46,11 +49,48 @@ def _error_text(error: BaseException) -> str:
     return type(error).__name__
 
 
+class DiscoveryClient(Protocol):
+    """Antarmuka bersama JdihnClient dan PasalClient."""
+
+    async def discover(
+        self,
+        keywords: tuple[str, ...],
+        exclude_keywords: tuple[str, ...],
+        *,
+        ministry: str | None = None,
+        aliases: tuple[str, ...] = (),
+    ) -> list[SearchItem]: ...
+
+    async def fetch_detail(
+        self,
+        item: SearchItem,
+        keywords: tuple[str, ...],
+        exclude_keywords: tuple[str, ...],
+    ) -> SourceDocument: ...
+
+
+#: Kegagalan jaringan/sementara dari sumber mana pun; kandidatnya dicoba lagi run berikutnya.
+SOURCE_NETWORK_ERRORS = (httpx.TransportError, JdihnRequestError, PasalRequestError)
+
+
+def _source_url(item: SearchItem, base_url: str) -> str:
+    if item.source_id.startswith(SOURCE_ID_PREFIX):
+        return f"https://pasal.id/api/v1/laws/{item.source_id[len(SOURCE_ID_PREFIX) :]}"
+    return f"{base_url.rstrip('/')}/doc/{item.source_id}"
+
+
+def _pdf_filename(document: SourceDocument) -> str:
+    if document.source_id.startswith(SOURCE_ID_PREFIX):
+        slug = document.source_id[len(SOURCE_ID_PREFIX) :].replace("/", "-")
+        return f"pasal-{slug}.pdf"
+    return f"jdihn-{document.source_id}.pdf"
+
+
 def _stub_document(item: SearchItem, base_url: str) -> SourceDocument:
     fingerprint = hashlib.sha256(item.searchable_text.encode()).hexdigest()
     return SourceDocument(
         source_id=item.source_id,
-        source_url=f"{base_url.rstrip('/')}/doc/{item.source_id}",
+        source_url=_source_url(item, base_url),
         title=item.title,
         attachment_url=None,
         category=item.category,
@@ -69,6 +109,20 @@ class CollectorService:
         self._settings = settings
         self._state = state
 
+    def _source_client(self, source: CollectorSource) -> JdihnClient | PasalClient:
+        if source == CollectorSource.PASAL_ID:
+            return PasalClient(
+                self._settings.pasal_api_base_url,
+                self._settings.require_pasal_token(),
+                self._settings.http_timeout_seconds,
+                self._settings.pasal_request_delay_seconds,
+            )
+        return JdihnClient(
+            self._settings.jdihn_base_url,
+            self._settings.http_timeout_seconds,
+            self._settings.request_delay_seconds,
+        )
+
     async def run(self, request: RunRequest) -> RunSummary:
         """Jalankan satu run dan kembalikan ringkasannya.
 
@@ -78,17 +132,21 @@ class CollectorService:
         sempat berjalan pun tetap punya jejak.
         """
         dry_run = request.dry_run
-        summary = RunSummary(mode=request.mode, dry_run=dry_run, ministry=request.ministry)
+        summary = RunSummary(
+            mode=request.mode,
+            dry_run=dry_run,
+            ministry=request.ministry,
+            source=request.source.value,
+        )
         max_actions = request.limit or self._settings.max_uploads_per_run
+        is_pasal = request.source == CollectorSource.PASAL_ID
+        source_label = "pasal.id" if is_pasal else "JDIHN"
+        error_prefix = "PASAL" if is_pasal else "JDIHN"
 
         try:
             async with AsyncExitStack() as stack:
-                jdihn = await stack.enter_async_context(
-                    JdihnClient(
-                        self._settings.jdihn_base_url,
-                        self._settings.http_timeout_seconds,
-                        self._settings.request_delay_seconds,
-                    )
+                source: DiscoveryClient = await stack.enter_async_context(
+                    self._source_client(request.source)
                 )
                 alignment: AlignmentClient | None = None
                 downloader: PdfDownloader | None = None
@@ -110,7 +168,7 @@ class CollectorService:
                         )
                     )
 
-                candidates = await jdihn.discover(
+                candidates = await source.discover(
                     request.keywords,
                     request.exclude_keywords,
                     ministry=request.ministry,
@@ -128,22 +186,23 @@ class CollectorService:
                     if actions >= max_actions:
                         break
                     try:
-                        document = await jdihn.fetch_detail(
+                        document = await source.fetch_detail(
                             item, request.keywords, request.exclude_keywords
                         )
-                    except (httpx.TransportError, JdihnRequestError) as error:
+                    except SOURCE_NETWORK_ERRORS as error:
                         message = _error_text(error)
                         summary.failed += 1
                         if not dry_run:
                             await self._state.record_fetch_failure(
                                 _stub_document(item, self._settings.jdihn_base_url),
                                 DocumentState.FAILED_RETRYABLE,
-                                error_code="JDIHN_NETWORK_ERROR",
+                                error_code=f"{error_prefix}_NETWORK_ERROR",
                                 error_message=message,
                             )
                         LOGGER.warning(
-                            "Gagal mengambil detail JDIHN source_id=%s, "
+                            "Gagal mengambil detail %s source_id=%s, "
                             "lanjut kandidat berikutnya: %s",
+                            source_label,
                             item.source_id,
                             message,
                         )
@@ -155,11 +214,14 @@ class CollectorService:
                             await self._state.record_fetch_failure(
                                 _stub_document(item, self._settings.jdihn_base_url),
                                 DocumentState.PARSE_FAILED,
-                                error_code="JDIHN_PARSE_ERROR",
+                                error_code=f"{error_prefix}_PARSE_ERROR",
                                 error_message=message,
                             )
                         LOGGER.error(
-                            "Gagal parsing JDIHN source_id=%s: %s", item.source_id, message
+                            "Gagal parsing %s source_id=%s: %s",
+                            source_label,
+                            item.source_id,
+                            message,
                         )
                         continue
 
@@ -227,7 +289,7 @@ class CollectorService:
             ):
                 with attempt:
                     downloaded = await downloader.download(
-                        document.attachment_url, f"jdihn-{document.source_id}.pdf"
+                        document.attachment_url, _pdf_filename(document)
                     )
 
             if downloaded is None:

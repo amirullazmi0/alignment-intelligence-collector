@@ -27,6 +27,17 @@ class CollectorSettings(BaseSettings):
         default="", validation_alias="COLLECTOR_EXCLUDE_KEYWORDS"
     )
     jdihn_base_url: str = Field(default="https://jdihn.go.id", validation_alias="JDIHN_BASE_URL")
+    # Sumber kedua: API metadata pasal.id untuk discovery, PDF dari situs resmi .go.id.
+    # Token dibuat gratis di https://pasal.id/akun; kosong berarti sumber ini tidak bisa
+    # dipakai, sementara jadwal JDIHN tetap berjalan.
+    pasal_api_base_url: str = Field(
+        default="https://pasal.id/api/v1", validation_alias="PASAL_API_BASE_URL"
+    )
+    pasal_api_token: SecretStr = Field(default=SecretStr(""), validation_alias="PASAL_API_TOKEN")
+    # Batas API pasal.id 60 permintaan/menit per route; 1,5 detik menjaga jauh di bawahnya.
+    pasal_request_delay_seconds: float = Field(
+        default=1.5, ge=1.0, validation_alias="PASAL_REQUEST_DELAY_SECONDS"
+    )
     # Tanpa nilai bawaan: alamat deployment tidak boleh menempel di kode. Default
     # yang menunjuk ke satu lingkungan membuat konfigurasi yang salah lolos diam-diam
     # lalu memanggil server yang keliru.
@@ -55,7 +66,7 @@ class CollectorSettings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     log_color: str = Field(default="auto", validation_alias="LOG_COLOR")
 
-    @field_validator("jdihn_base_url", "alignment_api_base_url")
+    @field_validator("jdihn_base_url", "alignment_api_base_url", "pasal_api_base_url")
     @classmethod
     def validate_https_url(cls, value: str) -> str:
         normalized = value.strip().rstrip("/")
@@ -81,6 +92,12 @@ class CollectorSettings(BaseSettings):
             raise ValueError("JDIHN_BASE_URL harus menggunakan domain jdihn.go.id")
         if host == "jdihn.go.id":
             self.jdihn_base_url = urlunparse(parsed._replace(netloc="www.jdihn.go.id"))
+        parsed_pasal = urlparse(self.pasal_api_base_url)
+        pasal_host = (parsed_pasal.hostname or "").lower()
+        if parsed_pasal.scheme != "https":
+            raise ValueError("PASAL_API_BASE_URL wajib menggunakan HTTPS")
+        if pasal_host != "pasal.id" and not pasal_host.endswith(".pasal.id"):
+            raise ValueError("PASAL_API_BASE_URL harus menggunakan domain pasal.id")
         return self
 
     @field_validator("log_level")
@@ -133,3 +150,13 @@ class CollectorSettings(BaseSettings):
         if not email or not password:
             raise ValueError("ALIGNMENT_EMAIL dan ALIGNMENT_PASSWORD wajib untuk upload")
         return email, password
+
+    def require_pasal_token(self) -> str:
+        """Token API pasal.id, wajib untuk run bersumber pasal.id (juga dry run)."""
+        token = self.pasal_api_token.get_secret_value().strip()
+        if not token:
+            raise ValueError(
+                "PASAL_API_TOKEN wajib diisi untuk sumber pasal.id; buat token gratis di "
+                "https://pasal.id/akun"
+            )
+        return token

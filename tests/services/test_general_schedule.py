@@ -25,6 +25,7 @@ def _run(ministry: str | None, keywords: tuple[str, ...]) -> Run:
         ministry=ministry,
         ministry_label=ministry or GENERAL_LABEL,
         keywords=keywords,
+        source="JDIHN",
         trigger="CRON",
         status="QUEUED",
         dry_run=False,

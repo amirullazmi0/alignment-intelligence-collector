@@ -133,7 +133,7 @@ class AlignmentClient:
         if self._token is None:
             raise RuntimeError("Alignment client belum login")
         form = {
-            "sourceName": "JDIHN",
+            "sourceName": document.source_name,
             "title": document.title,
             "documentKind": "NATIONAL_REGULATION",
         }

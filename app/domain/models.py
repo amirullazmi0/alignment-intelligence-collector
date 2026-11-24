@@ -9,6 +9,17 @@ if TYPE_CHECKING:
     from ..config import CollectorSettings
 
 
+class CollectorSource(StrEnum):
+    """Tempat collector menemukan kandidat dokumen.
+
+    Nilainya sama dengan enum `CollectorSource` di prisma/schema.prisma.
+    """
+
+    JDIHN = "JDIHN"
+    #: Discovery lewat API metadata pasal.id; PDF-nya diunduh dari situs resmi .go.id.
+    PASAL_ID = "PASAL_ID"
+
+
 class DocumentState(StrEnum):
     DISCOVERED = "DISCOVERED"
     SKIPPED_NO_PDF = "SKIPPED_NO_PDF"
@@ -69,6 +80,7 @@ class RunRequest:
     exclude_keywords: tuple[str, ...]
     ministry: str | None = None
     ministry_aliases: tuple[str, ...] = ()
+    source: CollectorSource = CollectorSource.JDIHN
 
     @classmethod
     def for_keywords(
@@ -79,6 +91,7 @@ class RunRequest:
         dry_run: bool,
         limit: int | None,
         keywords: tuple[str, ...],
+        source: CollectorSource = CollectorSource.JDIHN,
     ) -> RunRequest:
         """Run general: seluruh JDIHN, dibatasi keyword yang diberikan pemanggil.
 
@@ -95,6 +108,7 @@ class RunRequest:
             limit=limit,
             keywords=deduped,
             exclude_keywords=settings.exclude_keywords,
+            source=source,
         )
 
     @classmethod
@@ -108,6 +122,7 @@ class RunRequest:
         ministry: str,
         aliases: tuple[str, ...] = (),
         extra_keywords: tuple[str, ...] = (),
+        source: CollectorSource = CollectorSource.JDIHN,
     ) -> RunRequest:
         """Run bertema satu kementerian.
 
@@ -123,6 +138,7 @@ class RunRequest:
             exclude_keywords=settings.exclude_keywords,
             ministry=ministry,
             ministry_aliases=_dedupe(aliases),
+            source=source,
         )
 
 
@@ -142,6 +158,8 @@ class SourceDocument:
     fingerprint: str
     institution: str | None = None
     legal_hierarchy: str | None = None
+    #: Dikirim apa adanya sebagai `sourceName` ke Alignment.
+    source_name: str = "JDIHN"
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +191,7 @@ class RunSummary:
     failed: int = 0
     ministry: str | None = None
     ministry_matched: int = 0
+    source: str = CollectorSource.JDIHN.value
     preview: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
@@ -190,6 +209,7 @@ class RunSummary:
             "failed": self.failed,
             "ministry": self.ministry,
             "ministry_matched": self.ministry_matched,
+            "source": self.source,
         }
 
     @property
