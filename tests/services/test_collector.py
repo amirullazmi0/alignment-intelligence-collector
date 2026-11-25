@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -235,3 +236,50 @@ async def test_source_403_is_retryable_but_404_is_permanent(
             summary,
         )
     assert state.last_status == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_name", "expected_path"),
+    [("peraturan.go.id", "/api/v1/documents/external"), ("JDIHN", "/api/v1/documents")],
+)
+async def test_peraturan_go_id_is_linked_not_uploaded_and_pdf_is_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_name: str,
+    expected_path: str,
+) -> None:
+    """peraturan.go.id is registered by link; every source leaves no PDF behind."""
+
+    async def allow_test_host(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr("app.clients.pdf._validate_public_https_url", allow_test_host)
+    alignment_paths: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "files.example.org":
+            return httpx.Response(
+                200, content=b"%PDF-1.7 test", headers={"content-type": "application/pdf"}
+            )
+        if request.url.path.endswith("/v1/auth/login"):
+            return httpx.Response(200, json={"data": {"accessToken": "token"}})
+        alignment_paths.append(request.url.path)
+        return httpx.Response(201, json={"data": {"documentId": "document-id"}})
+
+    document = replace(_document(), source_name=source_name)
+    state = RecordingStateStore()
+    service = CollectorService(_settings(), state)
+    summary = RunSummary(mode="backfill", dry_run=False)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        await service._process_document(
+            document,
+            PdfDownloader(5, 1024, http_client, tmp_path),
+            AlignmentClient("https://alignment.example/api", "a@b.test", "x", 5, http_client),
+            summary,
+        )
+
+    assert state.last_status == DocumentState.UPLOADED
+    assert alignment_paths == [expected_path]
+    assert summary.uploaded == 1
+    assert list(tmp_path.iterdir()) == []

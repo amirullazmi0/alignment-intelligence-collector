@@ -45,6 +45,23 @@ def _error_message(response: httpx.Response) -> str:
     return f"Alignment API HTTP {response.status_code}"
 
 
+def _upload_result(response: httpx.Response) -> UploadResult:
+    """Terjemahkan respons unggah/daftar Alignment; 409 berarti dokumen sudah ada."""
+    if response.status_code == 409:
+        return UploadResult(document_id=None, duplicate=True)
+    if response.status_code == 429 or response.status_code >= 500:
+        raise RetryableUploadError(_error_message(response))
+    if response.status_code >= 400:
+        raise PermanentUploadError(_error_message(response))
+
+    body = _mapping(response.json())
+    data = _mapping(body.get("data")) if body else None
+    document_id = data.get("documentId") if data else None
+    if not isinstance(document_id, str) or not document_id:
+        raise PermanentUploadError("Response upload tidak memiliki documentId")
+    return UploadResult(document_id=document_id, duplicate=False)
+
+
 class AlignmentClient:
     def __init__(
         self,
@@ -108,19 +125,47 @@ class AlignmentClient:
                 filename,
                 include_law_year=False,
             )
-        if response.status_code == 409:
-            return UploadResult(document_id=None, duplicate=True)
-        if response.status_code == 429 or response.status_code >= 500:
-            raise RetryableUploadError(_error_message(response))
-        if response.status_code >= 400:
-            raise PermanentUploadError(_error_message(response))
+        return _upload_result(response)
 
-        body = _mapping(response.json())
-        data = _mapping(body.get("data")) if body else None
-        document_id = data.get("documentId") if data else None
-        if not isinstance(document_id, str) or not document_id:
-            raise PermanentUploadError("Response upload tidak memiliki documentId")
-        return UploadResult(document_id=document_id, duplicate=False)
+    async def register_external(
+        self, document: SourceDocument, pdf_url: str, sha256: str
+    ) -> UploadResult:
+        """Daftarkan dokumen lewat tautan PDF resminya, tanpa mengunggah file.
+
+        Alignment hanya menyimpan teks per Pasal/Ayat hasil ekstraksi; PDF-nya tetap di
+        sumber resmi (peraturan.go.id) dan dibaca ingestion langsung dari `pdf_url`.
+        """
+        payload: dict[str, object] = {
+            "title": document.title,
+            "pdfUrl": pdf_url,
+            "sourceUrl": document.source_url,
+            "sha256": sha256,
+            "sourceName": document.source_name,
+            "documentKind": "NATIONAL_REGULATION",
+        }
+        if document.law_number:
+            payload["lawNumber"] = document.law_number
+        if document.law_year is not None:
+            payload["lawYear"] = document.law_year
+        if document.law_type:
+            payload["lawType"] = document.law_type
+        if self._token is None:
+            await self._login()
+        response = await self._register_once(payload)
+        if response.status_code == 401:
+            self._token = None
+            await self._login()
+            response = await self._register_once(payload)
+        return _upload_result(response)
+
+    async def _register_once(self, payload: dict[str, object]) -> httpx.Response:
+        if self._token is None:
+            raise RuntimeError("Alignment client belum login")
+        return await self._client.post(
+            f"{self._base_url}/v1/documents/external",
+            headers={"Authorization": f"Bearer {self._token}"},
+            json=payload,
+        )
 
     async def _upload_once(
         self,

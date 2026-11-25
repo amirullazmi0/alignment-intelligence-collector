@@ -13,6 +13,7 @@ from ..clients.jdihn import JdihnClient, JdihnRequestError, ParseError
 from ..clients.pasal import SOURCE_ID_PREFIX, PasalClient, PasalRequestError
 from ..clients.pdf import PdfDownloader, PdfDownloadError, UnresolvedPdfHostError
 from ..clients.peraturan_go_id import SOURCE_ID_PREFIX as PGO_PREFIX
+from ..clients.peraturan_go_id import SOURCE_NAME as PERATURAN_GO_ID_SOURCE_NAME
 from ..clients.peraturan_go_id import PeraturanGoIdClient, PeraturanGoIdRequestError
 from ..config import CollectorSettings
 from ..domain.models import (
@@ -335,7 +336,17 @@ class CollectorService:
                 reraise=True,
             ):
                 with attempt:
-                    result = await alignment.upload(document, downloaded.path, downloaded.filename)
+                    if document.source_name == PERATURAN_GO_ID_SOURCE_NAME:
+                        # peraturan.go.id is the official, stable source: Alignment keeps
+                        # only the extracted text and links to the PDF there. The download
+                        # above only checked that the file is a real PDF and gave its hash.
+                        result = await alignment.register_external(
+                            document, document.attachment_url, downloaded.sha256
+                        )
+                    else:
+                        result = await alignment.upload(
+                            document, downloaded.path, downloaded.filename
+                        )
             if result is None:
                 raise AssertionError("Upload selesai tanpa result")
             if result.duplicate:
@@ -407,6 +418,11 @@ class CollectorService:
                 error,
                 downloaded,
             )
+        finally:
+            # The PDF is only needed for this one upload; Alignment keeps its own copy
+            # (ImageKit) or, for peraturan.go.id, the link. Keeping it filled the disk.
+            if downloaded is not None:
+                downloaded.path.unlink(missing_ok=True)
 
     async def _fail(
         self,
