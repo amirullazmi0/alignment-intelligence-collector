@@ -8,11 +8,21 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from ..storage.repository import CollectorRepository, Schedule
+from .catalog_sync import CatalogSync
 from .runner import RunExecutor
 
 LOGGER = logging.getLogger(__name__)
 
 JOB_PREFIX = "ministry-schedule:"
+CATALOG_JOB_PREFIX = "pgo-catalog:"
+#: Built-in jobs of the peraturan.go.id mirror (cron, Asia/Jakarta). Spread over the
+#: hour so they rarely wait on each other's lock.
+CATALOG_JOBS: dict[str, str] = {
+    "sync_new": "5 * * * *",
+    "refresh_details": "15 * * * *",
+    "ingest_text": "40 * * * *",
+    "sweep": "30 1 * * *",
+}
 
 
 def build_trigger(cron_expression: str, timezone: str) -> CronTrigger:
@@ -121,6 +131,21 @@ class CollectorScheduler:
             )
             registered += 1
         LOGGER.info("Jadwal cron aktif: %s", registered)
+
+    def register_catalog_jobs(self, sync: CatalogSync, timezone: str = "Asia/Jakarta") -> None:
+        """Jobs that keep the peraturan.go.id mirror current; not tied to any schedule row."""
+        for job, cron in CATALOG_JOBS.items():
+            self._scheduler.add_job(
+                sync.run,
+                trigger=build_trigger(cron, timezone),
+                id=f"{CATALOG_JOB_PREFIX}{job}",
+                args=[job],
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=3600,
+            )
+        LOGGER.info("Job katalog peraturan.go.id aktif: %s", ", ".join(CATALOG_JOBS))
 
     async def _fire(self, schedule_id: str) -> None:
         schedule = await self._repository.get_schedule(schedule_id)

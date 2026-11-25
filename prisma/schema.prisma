@@ -136,6 +136,8 @@ model SourceDocument {
   status           DocumentState
   pdfSha256        String?         @map("pdf_sha256")
   targetDocumentId String?         @map("target_document_id")
+  /// Run terakhir yang memproses dokumen ini (NULL untuk CLI dan data lama).
+  lastRunId        String?         @map("last_run_id") @db.Uuid
   attempts         Int             @default(0)
   errorCode        String?         @map("error_code")
   errorMessage     String?         @map("error_message")
@@ -144,6 +146,8 @@ model SourceDocument {
 
   @@index([status])
   @@index([institution])
+  @@index([lastRunId])
+  @@index([updatedAt])
   @@map("source_documents")
 }
 
@@ -157,4 +161,57 @@ model CatalogCheckpoint {
 
   @@id([source, catalogue])
   @@map("catalog_checkpoints")
+}
+
+/// Cermin katalog peraturan.go.id. Metadata semua peraturan disimpan di sini dan
+/// disinkronkan terus; teks pasalnya ada di Alignment (alignment_document_id).
+/// text_status: PENDING, REGISTERED, DUPLICATE, NO_PDF, FAILED.
+model Regulation {
+  sourceId            String    @id @map("source_id")
+  catalogue           String
+  title               String
+  lawType             String    @map("law_type")
+  lawNumber           String?   @map("law_number")
+  lawYear             Int?      @map("law_year")
+  issuer              String?
+  status              String?
+  relations           Json      @default("[]")
+  pageUrl             String    @map("page_url")
+  pdfUrl              String?   @map("pdf_url")
+  fingerprint         String?
+  textStatus          String    @default("PENDING") @map("text_status")
+  textAttempts        Int       @default(0) @map("text_attempts")
+  textError           String?   @map("text_error")
+  pdfSha256           String?   @map("pdf_sha256")
+  alignmentDocumentId String?   @map("alignment_document_id")
+  firstSeenAt         DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt          DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  detailCheckedAt     DateTime? @map("detail_checked_at") @db.Timestamptz(3)
+  changedAt           DateTime? @map("changed_at") @db.Timestamptz(3)
+  textSyncedAt        DateTime? @map("text_synced_at") @db.Timestamptz(3)
+  updatedAt           DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  changes RegulationChange[]
+
+  @@index([catalogue, lawYear])
+  @@index([textStatus])
+  @@index([detailCheckedAt])
+  @@index([status])
+  @@map("regulations")
+}
+
+/// Perubahan yang ditemukan saat cek ulang detail peraturan.
+model RegulationChange {
+  id        BigInt   @id @default(autoincrement())
+  sourceId  String   @map("source_id")
+  field     String
+  oldValue  String?  @map("old_value")
+  newValue  String?  @map("new_value")
+  changedAt DateTime @default(now()) @map("changed_at") @db.Timestamptz(3)
+
+  regulation Regulation @relation(fields: [sourceId], references: [sourceId], onDelete: Cascade)
+
+  @@index([changedAt])
+  @@index([sourceId])
+  @@map("regulation_changes")
 }

@@ -128,7 +128,12 @@ class AlignmentClient:
         return _upload_result(response)
 
     async def register_external(
-        self, document: SourceDocument, pdf_url: str, sha256: str
+        self,
+        document: SourceDocument,
+        pdf_url: str,
+        sha256: str,
+        *,
+        relations: list[dict[str, str]] | None = None,
     ) -> UploadResult:
         """Daftarkan dokumen lewat tautan PDF resminya, tanpa mengunggah file.
 
@@ -149,19 +154,51 @@ class AlignmentClient:
             payload["lawYear"] = document.law_year
         if document.law_type:
             payload["lawType"] = document.law_type
+        if document.effective_status:
+            payload["effectiveStatus"] = document.effective_status
+        if relations is not None:
+            payload["relations"] = relations
+        response = await self._send_external("POST", payload)
+        return _upload_result(response)
+
+    async def update_external(
+        self,
+        source_url: str,
+        *,
+        effective_status: str | None,
+        relations: list[dict[str, str]],
+    ) -> str | None:
+        """Sinkronkan status berlaku/dicabut dan relasi dokumen bertautan.
+
+        Dokumen dicari lewat halaman resminya (`sourceUrl`). Mengembalikan documentId,
+        atau None bila Alignment belum punya dokumen itu (404).
+        """
+        payload: dict[str, object] = {
+            "sourceUrl": source_url,
+            "effectiveStatus": effective_status,
+            "relations": relations,
+        }
+        response = await self._send_external("PATCH", payload)
+        if response.status_code == 404:
+            return None
+        result = _upload_result(response)
+        return result.document_id
+
+    async def _send_external(self, method: str, payload: dict[str, object]) -> httpx.Response:
         if self._token is None:
             await self._login()
-        response = await self._register_once(payload)
+        response = await self._external_once(method, payload)
         if response.status_code == 401:
             self._token = None
             await self._login()
-            response = await self._register_once(payload)
-        return _upload_result(response)
+            response = await self._external_once(method, payload)
+        return response
 
-    async def _register_once(self, payload: dict[str, object]) -> httpx.Response:
+    async def _external_once(self, method: str, payload: dict[str, object]) -> httpx.Response:
         if self._token is None:
             raise RuntimeError("Alignment client belum login")
-        return await self._client.post(
+        return await self._client.request(
+            method,
             f"{self._base_url}/v1/documents/external",
             headers={"Authorization": f"Bearer {self._token}"},
             json=payload,

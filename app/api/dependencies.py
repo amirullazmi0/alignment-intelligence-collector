@@ -5,8 +5,10 @@ from functools import lru_cache
 from fastapi import Request
 
 from ..config import CollectorSettings
+from ..services.catalog_sync import CatalogSync
 from ..services.runner import RunBroker, RunExecutor
 from ..services.scheduler import CollectorScheduler
+from ..storage.catalog import CatalogStore
 from ..storage.repository import CollectorRepository
 from ..storage.state import StateStore
 
@@ -39,6 +41,16 @@ def get_broker(request: Request) -> RunBroker:
     return broker
 
 
+def get_catalog(request: Request) -> CatalogStore:
+    catalog: CatalogStore = request.app.state.catalog
+    return catalog
+
+
+def get_catalog_sync(request: Request) -> CatalogSync:
+    sync: CatalogSync = request.app.state.catalog_sync
+    return sync
+
+
 def get_state_store(request: Request) -> StateStore:
     store: StateStore = request.app.state.state_store
     return store
@@ -46,6 +58,8 @@ def get_state_store(request: Request) -> StateStore:
 
 __all__ = [
     "get_broker",
+    "get_catalog",
+    "get_catalog_sync",
     "get_executor",
     "get_repository",
     "get_scheduler",

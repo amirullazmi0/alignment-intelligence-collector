@@ -83,6 +83,39 @@ CheckpointGet = Callable[[str], Awaitable[int]]
 CheckpointSet = Callable[[str, int], Awaitable[None]]
 
 
+def regulation_fingerprint(
+    attachment_url: str | None,
+    status: str | None,
+    title: str,
+    relations: tuple[Relation, ...] | list[Relation],
+) -> str:
+    """What makes a regulation "changed": its PDF, status, title or relations."""
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "attachment_url": attachment_url,
+                "status": status,
+                "title": title,
+                "relations": [[r.kind, r.target] for r in relations],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+
+
+async def _never_known(_source_id: str) -> bool:
+    return False
+
+
+async def _first_page(_catalogue: str) -> int:
+    return 1
+
+
+async def _ignore_checkpoint(_catalogue: str, _page: int) -> None:
+    return None
+
+
 def catalogues_from_keywords(keywords: tuple[str, ...]) -> tuple[str, ...]:
     """Schedule keywords -> catalogue slugs; unknown words are ignored."""
     slugs = tuple(
@@ -222,10 +255,10 @@ class PeraturanGoIdClient:
         timeout_seconds: float,
         request_delay_seconds: float,
         *,
-        mode: str,
-        is_known: KnownFn,
-        get_checkpoint: CheckpointGet,
-        set_checkpoint: CheckpointSet,
+        mode: str = "backfill",
+        is_known: KnownFn = _never_known,
+        get_checkpoint: CheckpointGet = _first_page,
+        set_checkpoint: CheckpointSet = _ignore_checkpoint,
         max_pages_per_run: int = 10,
         client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -271,6 +304,22 @@ class PeraturanGoIdClient:
                     raise ParseError(f"HTTP {response.status_code} untuk {url}")
                 return response
         raise AssertionError("retry loop selesai tanpa response")
+
+    async def fetch_list_page(
+        self, catalogue: str, page: int
+    ) -> list[tuple[SearchItem, str | None]]:
+        """One page of a catalogue list (20 items, newest first); empty past the end."""
+        response = await self._get(f"{self._base_url}/{catalogue}", {"page": str(page)})
+        return parse_list_page(response.text, self._base_url, catalogue)
+
+    def page_url(self, source_id: str) -> str:
+        return f"{self._base_url}/id/{source_id.removeprefix(SOURCE_ID_PREFIX)}"
+
+    async def fetch_detail_page(self, source_id: str) -> DetailPage:
+        """Status, issuer, PDFs and relations from a regulation's detail page."""
+        url = self.page_url(source_id)
+        response = await self._get(url)
+        return parse_detail_page(response.text, str(response.url))
 
     async def _sweep(self, catalogue: str, wanted: int) -> list[SearchItem]:
         """New items of one catalogue, from its checkpoint page on."""
@@ -335,18 +384,9 @@ class PeraturanGoIdClient:
         listed_pdf = self._list_pdf.get(item.source_id)
         attachment = best_pdf([*detail.pdf_urls, *([listed_pdf] if listed_pdf else [])])
         catalogue = self._catalogue_of.get(item.source_id, "")
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                {
-                    "attachment_url": attachment,
-                    "status": detail.status,
-                    "title": item.title,
-                    "relations": [[r.kind, r.target] for r in detail.relations],
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+        fingerprint = regulation_fingerprint(
+            attachment, detail.status, item.title, detail.relations
+        )
         number = re.search(r"Nomor\s+(\S+)", item.document_number or "")
         enriched = replace(
             item, institution=detail.issuer or item.institution, effective_status=detail.status
@@ -383,4 +423,5 @@ __all__ = [
     "catalogues_from_keywords",
     "parse_detail_page",
     "parse_list_page",
+    "regulation_fingerprint",
 ]

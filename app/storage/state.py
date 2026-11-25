@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -10,6 +11,14 @@ from .database import Database
 MAX_ERROR_MESSAGE = 500
 #: Retryable failures after this many attempts become FAILED_PERMANENT.
 MAX_RETRY_ATTEMPTS = 5
+
+
+#: Run being executed in this task; set by RunExecutor so every document it touches
+#: remembers which run did it. None for the CLI.
+CURRENT_RUN_ID: ContextVar[str | None] = ContextVar("current_run_id", default=None)
+
+#: Source of a document, from its id: pgo: = peraturan.go.id, pasal: = pasal.id.
+SOURCE_PREFIXES = {"PERATURAN_GO_ID": "pgo:", "PASAL_ID": "pasal:"}
 
 
 def _now() -> datetime:
@@ -86,11 +95,11 @@ class StateStore:
                 INSERT INTO source_documents (
                     source_id, source_url, title, fingerprint, attachment_url, institution,
                     legal_hierarchy, matched_keywords, status, pdf_sha256, target_document_id,
-                    attempts, error_code, error_message, first_seen_at, updated_at
+                    attempts, error_code, error_message, first_seen_at, updated_at, last_run_id
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6,
                     $7::text::"LegalHierarchy", $8, $9::text::"DocumentState", $10, $11,
-                    $12, $13, $14, $15, $15
+                    $12, $13, $14, $15, $15, $17::uuid
                 )
                 ON CONFLICT (source_id) DO UPDATE SET
                     source_url = EXCLUDED.source_url,
@@ -117,7 +126,8 @@ class StateStore:
                     attempts = source_documents.attempts + EXCLUDED.attempts,
                     error_code = EXCLUDED.error_code,
                     error_message = EXCLUDED.error_message,
-                    updated_at = EXCLUDED.updated_at
+                    updated_at = EXCLUDED.updated_at,
+                    last_run_id = COALESCE(EXCLUDED.last_run_id, source_documents.last_run_id)
                 """,
                 document.source_id,
                 document.source_url,
@@ -135,6 +145,7 @@ class StateStore:
                 error_message[:MAX_ERROR_MESSAGE] if error_message else None,
                 timestamp,
                 MAX_RETRY_ATTEMPTS,
+                CURRENT_RUN_ID.get(),
             )
 
     async def record_fetch_failure(
@@ -159,16 +170,17 @@ class StateStore:
                 INSERT INTO source_documents (
                     source_id, source_url, title, fingerprint, attachment_url, institution,
                     matched_keywords, status, attempts, error_code, error_message,
-                    first_seen_at, updated_at
+                    first_seen_at, updated_at, last_run_id
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6,
-                    $7, $8::text::"DocumentState", 1, $9, $10, $11, $11
+                    $7, $8::text::"DocumentState", 1, $9, $10, $11, $11, $12::uuid
                 )
                 ON CONFLICT (source_id) DO UPDATE SET
                     attempts = source_documents.attempts + 1,
                     error_code = EXCLUDED.error_code,
                     error_message = EXCLUDED.error_message,
-                    updated_at = EXCLUDED.updated_at
+                    updated_at = EXCLUDED.updated_at,
+                    last_run_id = COALESCE(EXCLUDED.last_run_id, source_documents.last_run_id)
                 """,
                 document.source_id,
                 document.source_url,
@@ -181,6 +193,7 @@ class StateStore:
                 error_code,
                 error_message[:MAX_ERROR_MESSAGE],
                 timestamp,
+                CURRENT_RUN_ID.get(),
             )
 
     async def is_known(self, source_id: str) -> bool:
@@ -243,6 +256,90 @@ class StateStore:
                 list(error_codes),
             )
         return len(rows)
+
+    async def list_documents(
+        self,
+        *,
+        status: str | None = None,
+        source: str | None = None,
+        run_id: str | None = None,
+        schedule_id: str | None = None,
+        search: str | None = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[list[dict[str, object]], int]:
+        """Collected documents, newest activity first, for the dashboard."""
+        conditions: list[str] = []
+        params: list[object] = []
+
+        def add(condition: str, value: object) -> None:
+            params.append(value)
+            conditions.append(condition.replace("?", f"${len(params)}"))
+
+        if status:
+            add('d.status = ?::text::"DocumentState"', status)
+        if source == "JDIHN":
+            conditions.append("d.source_id NOT LIKE 'pgo:%' AND d.source_id NOT LIKE 'pasal:%'")
+        elif source in SOURCE_PREFIXES:
+            add("d.source_id LIKE ?", f"{SOURCE_PREFIXES[source]}%")
+        if run_id:
+            add("d.last_run_id = ?::uuid", run_id)
+        if schedule_id:
+            add("r.schedule_id = ?::uuid", schedule_id)
+        if search:
+            # str.replace swaps both "?" for the same parameter.
+            add("(d.title ILIKE ? OR d.institution ILIKE ?)", f"%{search}%")
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        base = f"""
+            FROM source_documents d
+            LEFT JOIN collector_runs r ON r.id = d.last_run_id
+            {where}
+        """
+        async with self._db.acquire() as connection:
+            total = await connection.fetchval(f"SELECT count(*) {base}", *params)
+            rows = await connection.fetch(
+                f"""
+                SELECT d.source_id, d.source_url, d.title, d.attachment_url, d.institution,
+                    d.status::text AS status, d.target_document_id, d.attempts, d.error_code,
+                    d.error_message, d.first_seen_at, d.updated_at, d.last_run_id::text AS run_id,
+                    r.schedule_id::text AS schedule_id, r.ministry_label
+                {base}
+                ORDER BY d.updated_at DESC
+                LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
+                """,
+                *params,
+                limit,
+                (page - 1) * limit,
+            )
+        items = [
+            {
+                "sourceId": row["source_id"],
+                "source": next(
+                    (
+                        name
+                        for name, prefix in SOURCE_PREFIXES.items()
+                        if str(row["source_id"]).startswith(prefix)
+                    ),
+                    "JDIHN",
+                ),
+                "sourceUrl": row["source_url"],
+                "title": row["title"],
+                "attachmentUrl": row["attachment_url"],
+                "institution": row["institution"],
+                "status": row["status"],
+                "alignmentDocumentId": row["target_document_id"],
+                "attempts": row["attempts"],
+                "errorCode": row["error_code"],
+                "errorMessage": row["error_message"],
+                "firstSeenAt": row["first_seen_at"].isoformat(),
+                "updatedAt": row["updated_at"].isoformat(),
+                "runId": row["run_id"],
+                "scheduleId": row["schedule_id"],
+                "runLabel": row["ministry_label"],
+            }
+            for row in rows
+        ]
+        return items, int(total or 0)
 
     async def status_counts(self) -> Mapping[str, int]:
         async with self._db.acquire() as connection:
