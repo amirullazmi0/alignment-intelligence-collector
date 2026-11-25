@@ -8,6 +8,8 @@ from ..domain.models import DocumentState, SourceDocument
 from .database import Database
 
 MAX_ERROR_MESSAGE = 500
+#: Retryable failures after this many attempts become FAILED_PERMANENT.
+MAX_RETRY_ATTEMPTS = 5
 
 
 def _now() -> datetime:
@@ -100,7 +102,14 @@ class StateStore:
                         EXCLUDED.legal_hierarchy, source_documents.legal_hierarchy
                     ),
                     matched_keywords = EXCLUDED.matched_keywords,
-                    status = EXCLUDED.status,
+                    -- A retryable failure that keeps coming back becomes permanent, so a
+                    -- dead link is not retried by every run forever.
+                    status = CASE
+                        WHEN EXCLUDED.status = 'FAILED_RETRYABLE'::"DocumentState"
+                            AND source_documents.attempts + EXCLUDED.attempts >= $16
+                        THEN 'FAILED_PERMANENT'::"DocumentState"
+                        ELSE EXCLUDED.status
+                    END,
                     pdf_sha256 = COALESCE(EXCLUDED.pdf_sha256, source_documents.pdf_sha256),
                     target_document_id = COALESCE(
                         EXCLUDED.target_document_id, source_documents.target_document_id
@@ -125,6 +134,7 @@ class StateStore:
                 error_code,
                 error_message[:MAX_ERROR_MESSAGE] if error_message else None,
                 timestamp,
+                MAX_RETRY_ATTEMPTS,
             )
 
     async def record_fetch_failure(
@@ -173,22 +183,30 @@ class StateStore:
                 timestamp,
             )
 
-    async def reset_permanent_failures(self) -> int:
-        """Kembalikan dokumen FAILED_PERMANENT agar dicoba ulang pada run berikutnya."""
+    async def reset_permanent_failures(self, error_codes: tuple[str, ...] = ()) -> int:
+        """Kembalikan dokumen FAILED_PERMANENT agar dicoba ulang pada run berikutnya.
+
+        Dengan `error_codes`, hanya kegagalan dengan kode itu yang dikembalikan, misalnya
+        setelah perbaikan untuk penyebab tertentu. Attempts di-nol-kan supaya batas
+        percobaan berlaku lagi dari awal.
+        """
         async with self._db.acquire() as connection:
             rows = await connection.fetch(
                 """
                 UPDATE source_documents
                 SET status = $1::text::"DocumentState",
+                    attempts = 0,
                     error_code = NULL,
                     error_message = NULL,
                     updated_at = $2
                 WHERE status = $3::text::"DocumentState"
+                  AND (cardinality($4::text[]) = 0 OR error_code = ANY($4::text[]))
                 RETURNING source_id
                 """,
                 DocumentState.FAILED_RETRYABLE.value,
                 _now(),
                 DocumentState.FAILED_PERMANENT.value,
+                list(error_codes),
             )
         return len(rows)
 

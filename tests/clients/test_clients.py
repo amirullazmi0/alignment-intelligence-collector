@@ -8,7 +8,7 @@ import pytest
 
 from app.clients.alignment import AlignmentClient
 from app.clients.jdihn import JdihnClient, JdihnRequestError
-from app.clients.pdf import PdfDownloader, PdfDownloadError, UnsafePdfUrlError
+from app.clients.pdf import PdfDownloader, PdfDownloadError, UnsafePdfUrlError, upgrade_to_https
 from app.config import CollectorSettings
 from app.domain.models import SourceDocument
 
@@ -245,3 +245,14 @@ async def test_jdihn_discovery_keeps_results_when_one_keyword_fails(
         await client.__aexit__()
 
     assert [item.source_id for item in items] == ["42"]
+
+
+def test_http_pdf_links_are_upgraded_to_https() -> None:
+    assert (
+        upgrade_to_https("http://jdih.kemnaker.go.id/a.pdf") == "https://jdih.kemnaker.go.id/a.pdf"
+    )
+    assert (
+        upgrade_to_https("https://peraturan.go.id/files/a.pdf")
+        == "https://peraturan.go.id/files/a.pdf"
+    )
+    assert upgrade_to_https("ftp://x.go.id/a.pdf") == "ftp://x.go.id/a.pdf"

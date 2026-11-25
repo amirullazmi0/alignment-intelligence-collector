@@ -11,7 +11,7 @@ from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt,
 from ..clients.alignment import AlignmentClient, PermanentUploadError, RetryableUploadError
 from ..clients.jdihn import JdihnClient, JdihnRequestError, ParseError
 from ..clients.pasal import SOURCE_ID_PREFIX, PasalClient, PasalRequestError
-from ..clients.pdf import PdfDownloader, PdfDownloadError
+from ..clients.pdf import PdfDownloader, PdfDownloadError, UnresolvedPdfHostError
 from ..config import CollectorSettings
 from ..domain.models import (
     CollectorSource,
@@ -341,7 +341,9 @@ class CollectorService:
             # membuat dokumen tidak pernah dicoba lagi, karena FAILED_PERMANENT tidak
             # ikut di-retry pada run berikutnya.
             status_code = error.response.status_code
-            retryable = status_code == 429 or status_code >= 500
+            # 403 is often a WAF or rate rule on JDIH sites, not a missing file; it is
+            # retried like 5xx, and the attempt cap in the state store ends it.
+            retryable = status_code in {403, 429} or status_code >= 500
             await self._fail(
                 document,
                 summary,
@@ -355,7 +357,11 @@ class CollectorService:
                 document,
                 summary,
                 DocumentState.FAILED_PERMANENT,
-                type(error).__name__,
+                (
+                    "PDF_HOST_UNRESOLVED"
+                    if isinstance(error, UnresolvedPdfHostError)
+                    else type(error).__name__
+                ),
                 error,
                 downloaded,
             )

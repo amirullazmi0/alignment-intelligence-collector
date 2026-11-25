@@ -217,12 +217,19 @@ def serve(
 
 
 @app.command("reset-failed")
-def reset_failed() -> None:
+def reset_failed(
+    codes: Annotated[
+        str | None,
+        typer.Option(
+            help="Hanya kode error ini, dipisah koma, mis. UnsafePdfUrlError,PDF_HTTP_403",
+        ),
+    ] = None,
+) -> None:
     """Jadikan dokumen FAILED_PERMANENT dapat dicoba ulang pada run berikutnya."""
 
     async def action() -> int:
         async with _context(_settings()) as context:
-            return await context.state.reset_permanent_failures()
+            return await context.state.reset_permanent_failures(_split_keywords(codes))
 
     typer.echo(json.dumps({"reset": asyncio.run(action())}, ensure_ascii=False, indent=2))
 
