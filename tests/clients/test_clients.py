@@ -256,3 +256,60 @@ def test_http_pdf_links_are_upgraded_to_https() -> None:
         == "https://peraturan.go.id/files/a.pdf"
     )
     assert upgrade_to_https("ftp://x.go.id/a.pdf") == "ftp://x.go.id/a.pdf"
+
+
+@pytest.mark.asyncio
+async def test_alignment_registers_external_pdf_as_json_and_relogs_on_401() -> None:
+    login_count = 0
+    payloads: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal login_count
+        if request.url.path.endswith("/v1/auth/login"):
+            login_count += 1
+            return httpx.Response(200, json={"data": {"accessToken": f"token-{login_count}"}})
+        assert request.url.path.endswith("/v1/documents/external")
+        payloads.append(json.loads(request.content))
+        if request.headers.get("authorization") == "Bearer token-1":
+            return httpx.Response(401, json={"message": "expired"})
+        return httpx.Response(201, json={"data": {"documentId": "document-id"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AlignmentClient(
+            "https://alignment.example/api", "bot@example.test", "secret", 5, http_client
+        )
+        result = await client.register_external(
+            _document(), "https://peraturan.go.id/files/a.pdf", "f" * 64
+        )
+
+    assert result.document_id == "document-id"
+    assert login_count == 2
+    assert payloads[-1] == {
+        "title": "Peraturan Pendidikan",
+        "pdfUrl": "https://peraturan.go.id/files/a.pdf",
+        "sourceUrl": "https://jdihn.go.id/doc/42",
+        "sha256": "f" * 64,
+        "sourceName": "JDIHN",
+        "documentKind": "NATIONAL_REGULATION",
+        "lawNumber": "7",
+        "lawYear": 2024,
+        "lawType": "PERATURAN MENTERI",
+    }
+
+
+@pytest.mark.asyncio
+async def test_alignment_external_conflict_is_duplicate() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/v1/auth/login"):
+            return httpx.Response(200, json={"data": {"accessToken": "token"}})
+        return httpx.Response(409, json={"message": "duplicate"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AlignmentClient(
+            "https://alignment.example/api", "bot@example.test", "secret", 5, http_client
+        )
+        result = await client.register_external(
+            _document(), "https://peraturan.go.id/files/a.pdf", "f" * 64
+        )
+
+    assert result.duplicate is True

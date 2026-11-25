@@ -161,6 +161,11 @@ seterusnya (20 item per halaman, terbaru lebih dulu). robots.txt mengizinkan sem
 - Mode `incremental` hanya membaca dua halaman pertama, tempat peraturan baru muncul.
 - `source_id` berawalan `pgo:` (mis. `pgo:uu-no-13-tahun-2003`); `sourceName` ke Alignment
   `peraturan.go.id`.
+- **Tidak diunggah, didaftarkan lewat tautan.** PDF diunduh hanya untuk memastikan file-nya PDF asli
+  dan menghitung sha256, lalu dihapus. Collector memanggil `POST /v1/documents/external` dengan tautan
+  PDF resmi; Alignment tidak menyimpan file di ImageKit, ingestion membaca PDF dari peraturan.go.id ke
+  memori dan hanya menyimpan teks per Pasal/Ayat. Butuh Alignment Nest dengan migration `0010`.
+- Untuk semua sumber, file di `DOWNLOAD_DIR` dihapus setelah diproses (dulu menumpuk di container).
 - Env: `PERATURAN_GO_ID_BASE_URL`, `PERATURAN_GO_ID_REQUEST_DELAY_SECONDS` (bawaan 2),
   `PERATURAN_GO_ID_MAX_PAGES` (halaman per jenis per run backfill, bawaan 10).
 
