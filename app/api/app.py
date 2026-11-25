@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
+from ..services.catalog_sync import CatalogSync
 from ..services.runner import RunBroker, RunExecutor
 from ..services.scheduler import CollectorScheduler
+from ..storage.catalog import CatalogStore
 from ..storage.database import Database
 from ..storage.repository import CollectorRepository
 from ..storage.state import StateStore
@@ -43,16 +47,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await executor.recover()
     await scheduler.start()
 
+    catalog = CatalogStore(database)
+    catalog_sync = CatalogSync(settings, catalog, state)
+    background: set[asyncio.Task[Any]] = set()
+    if settings.pgo_sync_enabled:
+        scheduler.register_catalog_jobs(catalog_sync)
+        if await catalog.count() == 0:
+            # First start: mirror the whole catalogue now instead of waiting for the night.
+            task = asyncio.create_task(catalog_sync.run("sweep"))
+            background.add(task)
+            task.add_done_callback(background.discard)
+
     app.state.database = database
     app.state.state_store = state
     app.state.repository = repository
     app.state.broker = broker
     app.state.executor = executor
     app.state.scheduler = scheduler
+    app.state.catalog = catalog
+    app.state.catalog_sync = catalog_sync
+    app.state.background_tasks = background
     try:
         yield
     finally:
         await scheduler.stop()
+        for task in background:
+            task.cancel()
         await executor.stop()
         await database.close()
 

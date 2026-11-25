@@ -294,6 +294,7 @@ async def test_alignment_registers_external_pdf_as_json_and_relogs_on_401() -> N
         "lawNumber": "7",
         "lawYear": 2024,
         "lawType": "PERATURAN MENTERI",
+        "effectiveStatus": "Berlaku",
     }
 
 
