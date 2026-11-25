@@ -38,6 +38,17 @@ class CollectorSettings(BaseSettings):
     pasal_request_delay_seconds: float = Field(
         default=1.5, ge=1.0, validation_alias="PASAL_REQUEST_DELAY_SECONDS"
     )
+    # Sumber ketiga: katalog resmi peraturan.go.id, disusuri per jenis peraturan.
+    peraturan_go_id_base_url: str = Field(
+        default="https://peraturan.go.id", validation_alias="PERATURAN_GO_ID_BASE_URL"
+    )
+    peraturan_go_id_request_delay_seconds: float = Field(
+        default=2.0, ge=1.0, validation_alias="PERATURAN_GO_ID_REQUEST_DELAY_SECONDS"
+    )
+    #: Halaman daftar (20 item) yang dibaca per jenis dalam satu run backfill.
+    peraturan_go_id_max_pages: int = Field(
+        default=10, ge=1, le=200, validation_alias="PERATURAN_GO_ID_MAX_PAGES"
+    )
     # Tanpa nilai bawaan: alamat deployment tidak boleh menempel di kode. Default
     # yang menunjuk ke satu lingkungan membuat konfigurasi yang salah lolos diam-diam
     # lalu memanggil server yang keliru.

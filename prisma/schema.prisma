@@ -22,6 +22,7 @@ datasource db {
 enum CollectorSource {
   JDIHN
   PASAL_ID
+  PERATURAN_GO_ID
 }
 
 enum RunTrigger {
@@ -35,6 +36,7 @@ enum RunStatus {
   SUCCEEDED
   FAILED
 }
+
 enum DocumentState {
   DISCOVERED
   SKIPPED_NO_PDF
@@ -45,6 +47,7 @@ enum DocumentState {
   PARSE_FAILED
   SOURCE_CHANGED
 }
+
 enum LegalHierarchy {
   UUD_1945
   TAP_MPR
@@ -54,24 +57,25 @@ enum LegalHierarchy {
   PERDA_PROVINSI
   PERDA_KABUPATEN_KOTA
 }
+
 model MinistrySchedule {
-  id            String   @id @default(uuid()) @db.Uuid
+  id             String          @id @default(uuid()) @db.Uuid
   /// NULL berarti jadwal general: cakupannya seluruh JDIHN, dibatasi keyword saja.
   /// Tidak unik, karena satu kementerian boleh punya beberapa jadwal berbeda.
-  ministry      String?
-  ministryLabel String   @map("ministry_label")
-  aliases       String[] @default([])
-  keywords      String[] @default([])
-  source        CollectorSource @default(JDIHN)
-  cronExpression String  @map("cron_expression")
-  timezone      String   @default("Asia/Jakarta")
-  documentLimit Int      @default(10) @map("document_limit")
-  dryRun        Boolean  @default(false) @map("dry_run")
-  isActive      Boolean  @default(true) @map("is_active")
-  lastRunAt     DateTime? @map("last_run_at") @db.Timestamptz(3)
-  nextRunAt     DateTime? @map("next_run_at") @db.Timestamptz(3)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  ministry       String?
+  ministryLabel  String          @map("ministry_label")
+  aliases        String[]        @default([])
+  keywords       String[]        @default([])
+  source         CollectorSource @default(JDIHN)
+  cronExpression String          @map("cron_expression")
+  timezone       String          @default("Asia/Jakarta")
+  documentLimit  Int             @default(10) @map("document_limit")
+  dryRun         Boolean         @default(false) @map("dry_run")
+  isActive       Boolean         @default(true) @map("is_active")
+  lastRunAt      DateTime?       @map("last_run_at") @db.Timestamptz(3)
+  nextRunAt      DateTime?       @map("next_run_at") @db.Timestamptz(3)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   runs CollectorRun[]
 
@@ -81,22 +85,22 @@ model MinistrySchedule {
 }
 
 model CollectorRun {
-  id            String     @id @default(uuid()) @db.Uuid
-  scheduleId    String?    @map("schedule_id") @db.Uuid
+  id            String          @id @default(uuid()) @db.Uuid
+  scheduleId    String?         @map("schedule_id") @db.Uuid
   /// NULL untuk run general yang tidak menyasar satu kementerian tertentu.
   ministry      String?
-  ministryLabel String     @map("ministry_label")
-  keywords      String[]   @default([])
+  ministryLabel String          @map("ministry_label")
+  keywords      String[]        @default([])
   source        CollectorSource @default(JDIHN)
-  trigger       RunTrigger @default(MANUAL)
-  status        RunStatus  @default(QUEUED)
-  dryRun        Boolean    @default(false) @map("dry_run")
-  documentLimit Int?       @map("document_limit")
-  startedAt     DateTime?  @map("started_at") @db.Timestamptz(3)
-  finishedAt    DateTime?  @map("finished_at") @db.Timestamptz(3)
+  trigger       RunTrigger      @default(MANUAL)
+  status        RunStatus       @default(QUEUED)
+  dryRun        Boolean         @default(false) @map("dry_run")
+  documentLimit Int?            @map("document_limit")
+  startedAt     DateTime?       @map("started_at") @db.Timestamptz(3)
+  finishedAt    DateTime?       @map("finished_at") @db.Timestamptz(3)
   summary       Json?
-  errorMessage  String?    @map("error_message")
-  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  errorMessage  String?         @map("error_message")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
   schedule MinistrySchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
   logs     CollectorRunLog[]
@@ -105,6 +109,7 @@ model CollectorRun {
   @@index([ministry, createdAt])
   @@map("collector_runs")
 }
+
 model CollectorRunLog {
   id      BigInt   @id @default(autoincrement())
   runId   String   @map("run_id") @db.Uuid
@@ -118,6 +123,7 @@ model CollectorRunLog {
   @@index([runId, id])
   @@map("collector_run_logs")
 }
+
 model SourceDocument {
   sourceId         String          @id @map("source_id")
   sourceUrl        String          @map("source_url")
@@ -139,4 +145,16 @@ model SourceDocument {
   @@index([status])
   @@index([institution])
   @@map("source_documents")
+}
+
+/// Halaman katalog pertama yang mungkin masih berisi dokumen baru, per sumber dan jenis
+/// (mis. PERATURAN_GO_ID / uu). Maju hanya bila semua dokumen di halaman itu sudah tercatat.
+model CatalogCheckpoint {
+  source    String
+  catalogue String
+  nextPage  Int      @default(1) @map("next_page")
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@id([source, catalogue])
+  @@map("catalog_checkpoints")
 }
