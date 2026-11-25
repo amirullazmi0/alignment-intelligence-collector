@@ -161,6 +161,32 @@ class AlignmentClient:
         response = await self._send_external("POST", payload)
         return _upload_result(response)
 
+    async def ingestion_queue(self) -> int:
+        """Documents of the collector's workspace still pending or processing."""
+        if self._token is None:
+            await self._login()
+        response = await self._external_queue_once()
+        if response.status_code == 401:
+            self._token = None
+            await self._login()
+            response = await self._external_queue_once()
+        if response.status_code >= 400:
+            raise RetryableUploadError(_error_message(response))
+        body = _mapping(response.json())
+        data = _mapping(body.get("data")) if body else None
+
+        def count(key: str) -> int:
+            value = data.get(key) if data else None
+            return value if isinstance(value, int) else 0
+
+        return count("pending") + count("processing")
+
+    async def _external_queue_once(self) -> httpx.Response:
+        return await self._client.get(
+            f"{self._base_url}/v1/documents/external/queue",
+            headers={"Authorization": f"Bearer {self._token}"},
+        )
+
     async def update_external(
         self,
         source_url: str,

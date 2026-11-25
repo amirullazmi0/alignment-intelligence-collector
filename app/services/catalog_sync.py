@@ -142,7 +142,11 @@ class CatalogSync:
         self._pgo_factory = pgo_factory or self._default_pgo
         self._alignment_factory = alignment_factory or self._default_alignment
         self._downloader_factory = downloader_factory or self._default_downloader
+        # Jobs reading peraturan.go.id's lists and pages share one lock, so the
+        # site sees a single client. Sending text has its own: it must keep going
+        # during the nightly sweep, which holds the first lock for over an hour.
         self._lock = asyncio.Lock()
+        self._text_lock = asyncio.Lock()
         self.reports: dict[str, JobReport] = {}
 
     # -- factories -----------------------------------------------------------------
@@ -186,7 +190,7 @@ class CatalogSync:
         }
         if job not in jobs:
             raise ValueError(f"job tidak dikenal: {job}")
-        async with self._lock:
+        async with self._text_lock if job == "ingest_text" else self._lock:
             report = JobReport(job=job, started_at=datetime.now(UTC).isoformat())
             self.reports[job] = report
             started = time.perf_counter()
@@ -320,12 +324,28 @@ class CatalogSync:
                 )
 
     async def _ingest_text(self, report: JobReport) -> None:
-        pending = await self._catalog.pending_text(self._settings.pgo_text_per_hour)
-        if not pending:
-            return
-        async with self._alignment_factory() as alignment, self._downloader_factory() as downloader:
-            for regulation in pending:
-                await self._ingest_one(regulation, alignment, downloader, report)
+        """Send regulations to Alignment, as fast as Alignment ingests them.
+
+        With PGO_QUEUE_TARGET set, the run only fills Alignment's queue up to the
+        target: an empty queue gets a full batch on the next run (every 5 minutes),
+        a busy one gets nothing.
+        """
+        target = self._settings.pgo_queue_target
+        async with self._alignment_factory() as alignment:
+            if target > 0:
+                waiting = await alignment.ingestion_queue()
+                report.counts["queueBefore"] = waiting
+                room = max(0, target - waiting)
+            else:
+                room = self._settings.pgo_text_per_hour
+            if room == 0:
+                return
+            pending = await self._catalog.pending_text(room)
+            if not pending:
+                return
+            async with self._downloader_factory() as downloader:
+                for regulation in pending:
+                    await self._ingest_one(regulation, alignment, downloader, report)
 
     async def _ingest_one(
         self,

@@ -51,12 +51,16 @@ class CollectorSettings(BaseSettings):
     )
     # Cermin katalog peraturan.go.id yang selalu sinkron (job bawaan scheduler).
     pgo_sync_enabled: bool = Field(default=True, validation_alias="PGO_SYNC_ENABLED")
-    #: Detail peraturan yang dicek (ulang) per jam: status, relasi, PDF.
+    #: Detail peraturan yang dicek (ulang) per run (tiap 10 menit): status, relasi, PDF.
     pgo_detail_per_hour: int = Field(
-        default=200, ge=0, le=1500, validation_alias="PGO_DETAIL_PER_HOUR"
+        default=100, ge=0, le=1500, validation_alias="PGO_DETAIL_PER_HOUR"
     )
     #: Peraturan yang teksnya dikirim ke Alignment per jam (dibatasi kapasitas OCR).
     pgo_text_per_hour: int = Field(default=25, ge=0, le=500, validation_alias="PGO_TEXT_PER_HOUR")
+    #: Documents kept waiting in Alignment's ingestion queue. ingest_text runs every
+    #: few minutes and tops the queue up to this, so it goes as fast as Alignment can
+    #: process and never floods it. 0 falls back to PGO_TEXT_PER_HOUR per run.
+    pgo_queue_target: int = Field(default=10, ge=0, le=200, validation_alias="PGO_QUEUE_TARGET")
     #: Halaman daftar per jenis yang dibaca sapuan malam (seluruh katalog ±1.100 halaman per jenis).
     pgo_sweep_max_pages: int = Field(
         default=1200, ge=1, le=5000, validation_alias="PGO_SWEEP_MAX_PAGES"

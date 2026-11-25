@@ -167,7 +167,7 @@ class CollectorRepository:
     # ---------------------------------------------------------------- schedules
 
     async def list_schedules(
-        self, *, page: int = 1, limit: int = 10, search: str = ""
+        self, *, page: int = 1, limit: int = 10, search: str = "", source: str = ""
     ) -> tuple[list[Schedule], int]:
         """Satu halaman jadwal beserta jumlah totalnya.
 
@@ -179,15 +179,19 @@ class CollectorRepository:
         di tengah daftar dan sulit dipastikan benar-benar tersimpan.
         """
         needle = search.strip()
-        where = ""
+        conditions: list[str] = []
         params: list[object] = []
         if needle:
             params.append(f"%{needle}%")
-            where = """
-                WHERE ministry_label ILIKE $1
-                   OR ministry ILIKE $1
-                   OR array_to_string(keywords, ' ') ILIKE $1
-            """
+            n = len(params)
+            conditions.append(
+                f"(ministry_label ILIKE ${n} OR ministry ILIKE ${n}"
+                f" OR array_to_string(keywords, ' ') ILIKE ${n})"
+            )
+        if source.strip():
+            params.append(source.strip().upper())
+            conditions.append(f"source::text = ${len(params)}")
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         offset = max(0, (page - 1) * limit)
         async with self._db.acquire() as connection:

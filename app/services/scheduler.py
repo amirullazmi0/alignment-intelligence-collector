@@ -19,8 +19,12 @@ CATALOG_JOB_PREFIX = "pgo-catalog:"
 #: hour so they rarely wait on each other's lock.
 CATALOG_JOBS: dict[str, str] = {
     "sync_new": "5 * * * *",
-    "refresh_details": "15 * * * *",
-    "ingest_text": "40 * * * *",
+    # Details every 10 minutes keep ahead of ingest_text, which only sends
+    # regulations whose status and relations are known.
+    "refresh_details": "*/10 * * * *",
+    # Every 5 minutes: tops Alignment's queue up (PGO_QUEUE_TARGET), so a batch
+    # follows soon after the previous one is ingested.
+    "ingest_text": "*/5 * * * *",
     "sweep": "30 1 * * *",
 }
 
