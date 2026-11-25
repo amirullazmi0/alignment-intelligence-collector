@@ -142,6 +142,38 @@ Batasan:
 - Filter `type` yang tidak dikenal pasal.id diabaikan diam-diam (mis. `PERDA_PROV` memberi
   hasil campuran), jadi daftar jenis di `SEARCH_TYPES` harus memakai kode yang benar.
 
+## Sumber ketiga: katalog peraturan.go.id
+
+Sumber `PERATURAN_GO_ID` (CLI: `--source peraturan`, `run.ps1 -Source peraturan`) tidak mencari per
+keyword, tetapi menyusuri katalog resmi peraturan.go.id per jenis: `/uu?page=N`, `/pp?page=N`, dan
+seterusnya (20 item per halaman, terbaru lebih dulu). robots.txt mengizinkan semua; sitemap-nya rusak
+(HTTP 500), karena itu daftar per jenis yang dipakai.
+
+- Keyword jadwal berisi jenis yang disusuri: `uu, perppu, pp, perpres, permen, perda`. Kosong atau kata
+  lain berarti `uu, perppu, pp, perpres` (tingkat nasional, yang paling kosong di korpus).
+- Halaman daftar sudah memuat judul, nomor, tahun, pemrakarsa, dan tautan PDF resmi; halaman detail
+  (`/id/uu-no-13-tahun-2003`) menambah status (Berlaku/Dicabut) dan "Hubungan Antar Peraturan".
+  PDF utama dipilih, bukan penjelasan (`...pjl.pdf`) atau terjemahan.
+- **Checkpoint per jenis** di tabel `catalog_checkpoints` (migration `0005`): halaman pertama yang
+  mungkin masih berisi dokumen baru. Checkpoint hanya maju melewati halaman yang seluruh isinya sudah
+  tercatat, jadi run yang dibatasi `MAX_UPLOADS_PER_RUN` tidak melewatkan dokumen. Mencapai halaman
+  kosong berarti katalog selesai; susuran berikutnya mulai lagi dari halaman 1.
+- Mode `incremental` hanya membaca dua halaman pertama, tempat peraturan baru muncul.
+- `source_id` berawalan `pgo:` (mis. `pgo:uu-no-13-tahun-2003`); `sourceName` ke Alignment
+  `peraturan.go.id`.
+- Env: `PERATURAN_GO_ID_BASE_URL`, `PERATURAN_GO_ID_REQUEST_DELAY_SECONDS` (bawaan 2),
+  `PERATURAN_GO_ID_MAX_PAGES` (halaman per jenis per run backfill, bawaan 10).
+
+## Kegagalan dan percobaan ulang
+
+- Tautan PDF `http://` dicoba lewat `https://`; http biasa tidak pernah dibuka.
+- HTTP 403, 429, dan 5xx dari situs sumber dianggap sementara (banyak JDIH memasang WAF);
+  404 dan isi yang bukan PDF dianggap permanen. Host tanpa DNS tercatat `PDF_HOST_UNRESOLVED`.
+- Kegagalan sementara yang terulang 5 kali menjadi `FAILED_PERMANENT`, supaya tautan mati tidak
+  dicoba setiap run.
+- `reset-failed --codes UnsafePdfUrlError,PDF_HTTP_403` mengembalikan kegagalan permanen dengan kode
+  tertentu saja (attempts di-nol-kan); tanpa `--codes` semuanya.
+
 ## Daftar kementerian
 
 Ada di `src/alignment_collector/ministries.py`, berisi 49 kementerian beserta alias

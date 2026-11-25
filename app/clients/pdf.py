@@ -23,6 +23,30 @@ class UnsafePdfUrlError(PdfDownloadError):
     pass
 
 
+class UnresolvedPdfHostError(UnsafePdfUrlError):
+    """The PDF host has no DNS record: the source site is gone."""
+
+
+# Many JDIH sites answer 403 to a bare bot User-Agent; a browser-style one with
+# the collector's name still identifies us.
+USER_AGENT = (
+    "Mozilla/5.0 (compatible; AlignmentIntelligenceCollector/0.1; "
+    "+https://alignment-intelligence.apps.arulize.com)"
+)
+
+
+def upgrade_to_https(url: str) -> str:
+    """JDIHN lists many PDF links as http://; the same path over https is tried instead.
+
+    Plain http is never fetched, so a site without https still fails, now with
+    the https error rather than "URL PDF harus HTTPS".
+    """
+    parsed = urlparse(url)
+    if parsed.scheme == "http" and parsed.hostname:
+        return parsed._replace(scheme="https").geturl()
+    return url
+
+
 def _safe_filename(value: str) -> str:
     decoded = unquote(value).strip()
     sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", decoded).strip("._")
@@ -43,7 +67,7 @@ async def _validate_public_https_url(url: str) -> None:
             socket.getaddrinfo, parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM
         )
     except socket.gaierror as error:
-        raise UnsafePdfUrlError("Host PDF tidak dapat di-resolve") from error
+        raise UnresolvedPdfHostError("Host PDF tidak dapat di-resolve") from error
 
     for address in addresses:
         ip = ipaddress.ip_address(address[4][0])
@@ -74,7 +98,7 @@ class PdfDownloader:
             timeout=timeout_seconds,
             follow_redirects=False,
             verify=ssl_context,
-            headers={"User-Agent": "AlignmentIntelligenceCollector/0.1"},
+            headers={"User-Agent": USER_AGENT, "Accept": "application/pdf,*/*;q=0.8"},
         )
 
     async def __aenter__(self) -> PdfDownloader:
@@ -85,8 +109,9 @@ class PdfDownloader:
             await self._client.aclose()
 
     async def download(self, url: str, fallback_filename: str) -> DownloadedPdf:
-        current_url = url
+        current_url = upgrade_to_https(url)
         for redirect_count in range(4):
+            current_url = upgrade_to_https(current_url)
             await _validate_public_https_url(current_url)
             async with self._client.stream("GET", current_url) as response:
                 if response.status_code in {301, 302, 303, 307, 308}:

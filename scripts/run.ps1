@@ -6,7 +6,7 @@ param(
     [ValidateRange(1, [int]::MaxValue)]
     [int]$Limit = 0,
     [switch]$VerboseLogs,
-    [ValidateSet('jdihn', 'pasal')]
+    [ValidateSet('jdihn', 'pasal', 'peraturan')]
     [string]$Source = 'jdihn'
 )
 

@@ -154,7 +154,8 @@ async def test_download_failure_is_written_to_the_log(
             )
 
     assert state.last_status == DocumentState.FAILED_PERMANENT
-    assert "UnsafePdfUrlError" in caplog.text
+    # files.example.org has no DNS record: its own code, not the generic unsafe-URL one.
+    assert "PDF_HOST_UNRESOLVED" in caplog.text or "UnsafePdfUrlError" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -200,3 +201,37 @@ def test_error_text_collapses_multiline_messages() -> None:
     )
 
     assert "\n" not in _error_text(error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    [(403, DocumentState.FAILED_RETRYABLE), (404, DocumentState.FAILED_PERMANENT)],
+)
+async def test_source_403_is_retryable_but_404_is_permanent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    expected: DocumentState,
+) -> None:
+    """403 dari JDIH daerah sering berupa WAF, bukan file hilang; 404 memang hilang."""
+
+    async def allow_test_host(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr("app.clients.pdf._validate_public_https_url", allow_test_host)
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, text="no")
+
+    state = RecordingStateStore()
+    service = CollectorService(_settings(), state)
+    summary = RunSummary(mode="backfill", dry_run=False)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        await service._process_document(
+            _document(),
+            PdfDownloader(5, 1024, http_client, tmp_path),
+            AlignmentClient("https://alignment.example", "a@b.test", "x", 5, http_client),
+            summary,
+        )
+    assert state.last_status == expected

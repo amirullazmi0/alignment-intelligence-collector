@@ -18,6 +18,8 @@ class CollectorSource(StrEnum):
     JDIHN = "JDIHN"
     #: Discovery lewat API metadata pasal.id; PDF-nya diunduh dari situs resmi .go.id.
     PASAL_ID = "PASAL_ID"
+    #: Sweep of the official peraturan.go.id catalogue, one list per regulation type.
+    PERATURAN_GO_ID = "PERATURAN_GO_ID"
 
 
 class DocumentState(StrEnum):

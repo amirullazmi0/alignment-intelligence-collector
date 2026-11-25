@@ -17,7 +17,7 @@ class ScheduleInput(BaseModel):
 
     ministry: str | None = None
     #: JDIHN, atau PASAL_ID (API metadata pasal.id + PDF dari situs resmi .go.id).
-    source: Literal["JDIHN", "PASAL_ID"] = "JDIHN"
+    source: Literal["JDIHN", "PASAL_ID", "PERATURAN_GO_ID"] = "JDIHN"
     cronExpression: str = Field(default="0 2 * * *")
     timezone: str = "Asia/Jakarta"
     keywords: list[str] = Field(default_factory=list)
