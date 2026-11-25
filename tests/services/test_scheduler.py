@@ -29,6 +29,7 @@ def _run(run_id: str, ministry: str = "Kementerian Pariwisata") -> Run:
         ministry=ministry,
         ministry_label=ministry,
         keywords=(ministry,),
+        source="JDIHN",
         trigger="MANUAL",
         status="QUEUED",
         dry_run=True,

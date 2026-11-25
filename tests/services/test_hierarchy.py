@@ -41,7 +41,7 @@ def _item(
         (_item("Perpu tentang Pendidikan"), 3),
         (_item("Peraturan Pemerintah tentang Pendidikan"), 4),
         (_item("Peraturan Presiden tentang Pendidikan"), 5),
-        (_item("Keputusan Presiden tentang Pendidikan"), 5),
+        (_item("Keputusan Presiden tentang Pendidikan"), None),
         (_item("Peraturan Menteri Pendidikan"), 5),
         (
             _item(
@@ -58,7 +58,7 @@ def _item(
             ),
             7,
         ),
-        (_item("Peraturan Bupati Jembrana Nomor 9"), 7),
+        (_item("Peraturan Bupati Jembrana Nomor 9"), None),
         (_item("Perda Kabupaten tentang Usaha"), 7),
     ],
 )
@@ -98,9 +98,9 @@ def test_prioritize_national_before_provincial_and_newer_year_first() -> None:
         # JDIHN menuliskan regulationType sebagai "PERATURAN KEMENTERIAN", bukan
         # "peraturan menteri", sehingga varian ini sempat terbuang seluruhnya.
         (_item("Standar Pendidikan Guru", law_type="PERATURAN KEMENTERIAN"), 5),
-        (_item("Sertifikasi Dosen", law_type="KEPUTUSAN KEMENTERIAN"), 5),
+        (_item("Sertifikasi Dosen", law_type="KEPUTUSAN KEMENTERIAN"), None),
         (_item("Data Pokok Pendidikan", law_type="Peraturan Kementerian"), 5),
-        (_item("Tunjangan Guru", law_type="KEPUTUSAN MENTERI"), 5),
+        (_item("Tunjangan Guru", law_type="KEPUTUSAN MENTERI"), None),
         # Bukan peraturan tingkat nasional, harus tetap dibuang.
         (
             _item(
@@ -191,7 +191,7 @@ def test_ministry_priority_outranks_legal_hierarchy() -> None:
             "PERDA_PROVINSI",
         ),
         (
-            _item("Peraturan Bupati tentang Usaha", institution="JDIH Kabupaten Jembrana"),
+            _item("Peraturan Daerah tentang Usaha", institution="JDIH Kabupaten Jembrana"),
             "PERDA_KABUPATEN_KOTA",
         ),
         # Peraturan perguruan tinggi bukan bagian hierarki perundang-undangan.
@@ -219,7 +219,7 @@ def test_regency_documents_sort_after_national_ones() -> None:
     """
     undang_undang = _item("Undang-Undang tentang Usaha", source_id="10")
     permen = _item("Peraturan Menteri Perdagangan", source_id="20")
-    perbup = _item("Peraturan Bupati Jembrana", source_id="30")
+    perbup = _item("Peraturan Daerah Kabupaten Jembrana", source_id="30")
 
     ordered = prioritize_legal_hierarchy([perbup, permen, undang_undang])
 
@@ -232,3 +232,26 @@ def test_rector_regulations_stay_excluded() -> None:
 
     assert legal_hierarchy_rank(rektor) is None
     assert prioritize_legal_hierarchy([rektor]) == []
+
+
+@pytest.mark.parametrize(
+    ("title", "law_type", "expected_rank"),
+    [
+        # Di luar cakupan: Keputusan, kepala daerah, lembaga, putusan.
+        ("Keputusan Menteri Kesehatan HK.02.02/Menkes/469/2015", "Peraturan Menteri", None),
+        ("Peraturan Walikota Parepare Nomor 26 Tahun 2016", "Peraturan Daerah", None),
+        ("Peraturan Gubernur Jawa Barat Nomor 1 Tahun 2024", None, None),
+        ("Peraturan BPJS Kesehatan Nomor 2 Tahun 2024", "PERBAN", None),
+        ("Peraturan Badan Pengawas Obat dan Makanan Nomor 1", None, None),
+        ("Instruksi Presiden Nomor 1 Tahun 2025", None, None),
+        # Judul lebih dipercaya daripada label jenis dari sumber.
+        ("Peraturan Pemerintah Pengganti Undang-Undang Nomor 17 Tahun 1965", "UU", 3),
+        ("Peraturan Menteri Nomor 3 Tahun 2023 tentang Tarif", "Peraturan Pemerintah", 5),
+        ("QANUN KOTA LANGSA NOMOR 8 TAHUN 2015", None, 7),
+        ("PERATURAN DAERAH PROVINSI JAWA BARAT NOMOR 16 TAHUN 2008", None, 6),
+    ],
+)
+def test_cakupan_perda_sampai_uud(
+    title: str, law_type: str | None, expected_rank: int | None
+) -> None:
+    assert legal_hierarchy_rank(_item(title, law_type=law_type)) == expected_rank

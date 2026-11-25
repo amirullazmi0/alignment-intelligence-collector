@@ -17,6 +17,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Tempat kandidat dokumen ditemukan. PASAL_ID: API metadata pasal.id, PDF dari
+/// peraturan.go.id.
+enum CollectorSource {
+  JDIHN
+  PASAL_ID
+}
+
 enum RunTrigger {
   MANUAL
   CRON
@@ -55,6 +62,7 @@ model MinistrySchedule {
   ministryLabel String   @map("ministry_label")
   aliases       String[] @default([])
   keywords      String[] @default([])
+  source        CollectorSource @default(JDIHN)
   cronExpression String  @map("cron_expression")
   timezone      String   @default("Asia/Jakarta")
   documentLimit Int      @default(10) @map("document_limit")
@@ -79,6 +87,7 @@ model CollectorRun {
   ministry      String?
   ministryLabel String     @map("ministry_label")
   keywords      String[]   @default([])
+  source        CollectorSource @default(JDIHN)
   trigger       RunTrigger @default(MANUAL)
   status        RunStatus  @default(QUEUED)
   dryRun        Boolean    @default(false) @map("dry_run")

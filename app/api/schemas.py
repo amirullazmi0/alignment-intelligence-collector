@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # Nama field sengaja camelCase: inilah kontrak JSON yang dipakai dashboard, dan
@@ -14,6 +16,8 @@ class ScheduleInput(BaseModel):
     """
 
     ministry: str | None = None
+    #: JDIHN, atau PASAL_ID (API metadata pasal.id + PDF dari situs resmi .go.id).
+    source: Literal["JDIHN", "PASAL_ID"] = "JDIHN"
     cronExpression: str = Field(default="0 2 * * *")
     timezone: str = "Asia/Jakarta"
     keywords: list[str] = Field(default_factory=list)

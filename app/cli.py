@@ -13,7 +13,7 @@ import typer
 from pydantic import ValidationError
 
 from .config import CollectorSettings
-from .domain.models import RunRequest, RunSummary
+from .domain.models import CollectorSource, RunRequest, RunSummary
 from .logging_config import configure_logging
 from .services.collector import CollectorService
 from .storage.database import Database
@@ -63,6 +63,15 @@ def _split_keywords(value: str | None) -> tuple[str, ...]:
     return tuple(dict.fromkeys(part.strip() for part in (value or "").split(",") if part.strip()))
 
 
+def _parse_source(value: str) -> CollectorSource:
+    normalized = value.strip().lower()
+    if normalized == "jdihn":
+        return CollectorSource.JDIHN
+    if normalized in {"pasal", "pasal.id", "pasal_id"}:
+        return CollectorSource.PASAL_ID
+    raise typer.BadParameter("--source harus jdihn atau pasal")
+
+
 def _build_request(
     settings: CollectorSettings,
     mode: str,
@@ -71,6 +80,7 @@ def _build_request(
     limit: int | None,
     ministry: str | None,
     keywords: str | None,
+    source: CollectorSource = CollectorSource.JDIHN,
 ) -> RunRequest:
     extra_keywords = _split_keywords(keywords)
     if ministry:
@@ -81,6 +91,7 @@ def _build_request(
             limit=limit,
             ministry=ministry,
             extra_keywords=extra_keywords,
+            source=source,
         )
     # Tanpa kementerian, keyword harus disebut eksplisit. Sebelumnya nilai ini
     # diam-diam diambil dari COLLECTOR_TOPIC di `.env`, sehingga run yang dikira
@@ -88,7 +99,7 @@ def _build_request(
     if not extra_keywords:
         raise ValueError("Run tanpa --ministry wajib menyertakan --keywords, dipisah koma")
     return RunRequest.for_keywords(
-        settings, mode, dry_run=dry_run, limit=limit, keywords=extra_keywords
+        settings, mode, dry_run=dry_run, limit=limit, keywords=extra_keywords, source=source
     )
 
 
@@ -103,6 +114,7 @@ async def _execute(request: RunRequest) -> RunSummary:
             trigger="MANUAL",
             dry_run=request.dry_run,
             document_limit=request.limit,
+            source=request.source.value,
         )
         await context.repository.start_run(run.id)
         try:
@@ -121,11 +133,18 @@ def _run(
     verbose: bool,
     ministry: str | None = None,
     keywords: str | None = None,
+    source: str = "jdihn",
 ) -> None:
     settings = _settings()
     configure_logging(settings.log_level, settings.log_color, verbose=verbose)
     request = _build_request(
-        settings, mode, dry_run=dry_run, limit=limit, ministry=ministry, keywords=keywords
+        settings,
+        mode,
+        dry_run=dry_run,
+        limit=limit,
+        ministry=ministry,
+        keywords=keywords,
+        source=_parse_source(source),
     )
     try:
         summary = asyncio.run(_execute(request))
@@ -146,10 +165,13 @@ def backfill(
         str | None, typer.Option(help="Prioritaskan dokumen milik kementerian ini")
     ] = None,
     keywords: Annotated[str | None, typer.Option(help="Keyword tambahan, dipisah koma")] = None,
+    source: Annotated[
+        str, typer.Option(help="Sumber discovery: jdihn atau pasal (pasal.id + PDF .go.id)")
+    ] = "jdihn",
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Collect kandidat lama bertema yang belum pernah diproses."""
-    _run("backfill", dry_run, limit, verbose, ministry, keywords)
+    _run("backfill", dry_run, limit, verbose, ministry, keywords, source)
 
 
 @app.command()
@@ -162,10 +184,13 @@ def incremental(
         str | None, typer.Option(help="Prioritaskan dokumen milik kementerian ini")
     ] = None,
     keywords: Annotated[str | None, typer.Option(help="Keyword tambahan, dipisah koma")] = None,
+    source: Annotated[
+        str, typer.Option(help="Sumber discovery: jdihn atau pasal (pasal.id + PDF .go.id)")
+    ] = "jdihn",
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Collect kandidat baru dan retry kegagalan sementara."""
-    _run("incremental", dry_run, limit, verbose, ministry, keywords)
+    _run("incremental", dry_run, limit, verbose, ministry, keywords, source)
 
 
 @app.command()

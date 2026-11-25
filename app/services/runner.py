@@ -10,7 +10,7 @@ from typing import Any
 
 from ..config import CollectorSettings
 from ..domain.ministries import find_ministry
-from ..domain.models import RunRequest
+from ..domain.models import CollectorSource, RunRequest
 from ..storage.repository import CollectorRepository, Run
 from ..storage.state import StateStore
 from .collector import CollectorService
@@ -245,6 +245,7 @@ def _request_for(settings: CollectorSettings, run: Run) -> RunRequest:
             dry_run=run.dry_run,
             limit=run.document_limit,
             keywords=tuple(run.keywords),
+            source=CollectorSource(run.source),
         )
 
     ministry = find_ministry(run.ministry)
@@ -256,6 +257,7 @@ def _request_for(settings: CollectorSettings, run: Run) -> RunRequest:
         ministry=run.ministry,
         aliases=ministry.aliases if ministry else (),
         extra_keywords=tuple(k for k in run.keywords if k != run.ministry),
+        source=CollectorSource(run.source),
     )
 
 
