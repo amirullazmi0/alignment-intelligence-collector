@@ -12,7 +12,7 @@ from ..config import CollectorSettings
 from ..domain.ministries import find_ministry
 from ..domain.models import CollectorSource, RunRequest
 from ..storage.repository import CollectorRepository, Run
-from ..storage.state import StateStore
+from ..storage.state import CURRENT_RUN_ID, StateStore
 from .collector import CollectorService
 from .runlog import capture_run_logs
 
@@ -185,6 +185,9 @@ class RunExecutor:
 
         try:
             with capture_run_logs(queue, self._settings.log_level):
+                # The task copies this context: every document the run records is
+                # tagged with its run id (source_documents.last_run_id).
+                CURRENT_RUN_ID.set(run_id)
                 task = asyncio.create_task(
                     CollectorService(self._settings, self._state).run(request)
                 )

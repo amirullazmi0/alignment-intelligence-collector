@@ -136,6 +136,8 @@ model SourceDocument {
   status           DocumentState
   pdfSha256        String?         @map("pdf_sha256")
   targetDocumentId String?         @map("target_document_id")
+  /// Run terakhir yang memproses dokumen ini (NULL untuk CLI dan data lama).
+  lastRunId        String?         @map("last_run_id") @db.Uuid
   attempts         Int             @default(0)
   errorCode        String?         @map("error_code")
   errorMessage     String?         @map("error_message")
@@ -144,6 +146,8 @@ model SourceDocument {
 
   @@index([status])
   @@index([institution])
+  @@index([lastRunId])
+  @@index([updatedAt])
   @@map("source_documents")
 }
 

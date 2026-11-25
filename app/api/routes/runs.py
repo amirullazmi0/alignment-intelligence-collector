@@ -65,6 +65,33 @@ async def run_feed(_: Guarded, request: Request) -> StreamingResponse:
     )
 
 
+@router.get("/documents")
+async def list_documents(
+    _: Guarded,
+    request: Request,
+    status: str | None = None,
+    source: str | None = None,
+    runId: str | None = None,
+    scheduleId: str | None = None,
+    search: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+) -> dict[str, object]:
+    """Documents the collector has handled: what each run and schedule produced."""
+    page = max(page, 1)
+    limit = min(max(limit, 1), 100)
+    items, total = await get_state_store(request).list_documents(
+        status=status,
+        source=source,
+        run_id=runId,
+        schedule_id=scheduleId,
+        search=search.strip() if search else None,
+        page=page,
+        limit=limit,
+    )
+    return paginated(items, total, page, limit)
+
+
 @router.get("/documents/stats")
 async def document_stats(_: Guarded, request: Request) -> dict[str, int]:
     """Jumlah dokumen per status pemrosesan."""
