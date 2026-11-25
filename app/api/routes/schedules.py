@@ -71,11 +71,14 @@ async def list_schedules(
     page: int = 1,
     limit: int = 10,
     search: str = "",
+    source: str = "",
 ) -> dict[str, object]:
     safe_page = max(1, page)
     safe_limit = min(max(1, limit), 100)
     repository = get_repository(request)
-    items, total = await repository.list_schedules(page=safe_page, limit=safe_limit, search=search)
+    items, total = await repository.list_schedules(
+        page=safe_page, limit=safe_limit, search=search, source=source
+    )
     # Daftar kementerian yang sudah terpakai tidak lagi dikirim: satu kementerian
     # boleh punya beberapa jadwal, jadi tidak ada lagi yang perlu disembunyikan
     # dari pemilihnya.

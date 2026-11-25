@@ -244,6 +244,8 @@ async def test_text_is_registered_by_link_and_no_pdf_is_kept(
             )
         if request.url.path.endswith("/v1/auth/login"):
             return httpx.Response(200, json={"data": {"accessToken": "token"}})
+        if request.url.path.endswith("/v1/documents/external/queue"):
+            return httpx.Response(200, json={"data": {"pending": 0, "processing": 0}})
         registered.append(json.loads(request.content))
         return httpx.Response(201, json={"data": {"documentId": "doc-9"}})
 
@@ -258,7 +260,7 @@ async def test_text_is_registered_by_link_and_no_pdf_is_kept(
     )
 
     assert report.error is None
-    assert report.counts == {"registered": 1, "noPdf": 1}
+    assert report.counts == {"queueBefore": 0, "registered": 1, "noPdf": 1}
     assert catalog.marks == [
         ("pgo:uu-no-13-tahun-2003", "REGISTERED", "doc-9"),
         ("pgo:pp-no-1-tahun-2026", "NO_PDF", None),
@@ -288,3 +290,49 @@ def test_regulation_document_carries_the_official_metadata() -> None:
     assert document.source_url == f"{BASE}/id/uu-no-13-tahun-2003"
     assert document.document_number == "Nomor 13 Tahun 2003"
     assert document.source_name == "peraturan.go.id"
+
+
+@pytest.mark.parametrize(("waiting", "expected_sent"), [(10, 0), (8, 2), (0, 3)])
+async def test_ingest_text_only_fills_alignment_queue_up_to_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, waiting: int, expected_sent: int
+) -> None:
+    """A full queue gets nothing; an emptier one is topped up to PGO_QUEUE_TARGET (10)."""
+
+    async def allow(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr("app.clients.pdf._validate_public_https_url", allow)
+    sent: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/files/"):
+            return httpx.Response(
+                200, content=b"%PDF-1.7 x", headers={"content-type": "application/pdf"}
+            )
+        if request.url.path.endswith("/v1/auth/login"):
+            return httpx.Response(200, json={"data": {"accessToken": "token"}})
+        if request.url.path.endswith("/v1/documents/external/queue"):
+            return httpx.Response(200, json={"data": {"pending": waiting, "processing": 0}})
+        sent.append(json.loads(request.content)["pdfUrl"])
+        return httpx.Response(201, json={"data": {"documentId": f"doc-{len(sent)}"}})
+
+    rows = [
+        _regulation(
+            source_id=f"pgo:uu-no-{i}-tahun-2025",
+            pdf_url=f"{BASE}/files/uu-{i}.pdf",
+            text_status="PENDING",
+        )
+        for i in range(3)
+    ]
+
+    class Limited(MemoryCatalog):
+        async def pending_text(self, limit: int) -> list[Regulation]:
+            return list(self.rows.values())[:limit]
+
+    report = await _sync(Limited(rows), httpx.MockTransport(handler), tmp_path=tmp_path).run(
+        "ingest_text"
+    )
+
+    assert report.error is None
+    assert len(sent) == expected_sent
+    assert report.counts["queueBefore"] == waiting
