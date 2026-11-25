@@ -12,6 +12,8 @@ from ..clients.alignment import AlignmentClient, PermanentUploadError, Retryable
 from ..clients.jdihn import JdihnClient, JdihnRequestError, ParseError
 from ..clients.pasal import SOURCE_ID_PREFIX, PasalClient, PasalRequestError
 from ..clients.pdf import PdfDownloader, PdfDownloadError, UnresolvedPdfHostError
+from ..clients.peraturan_go_id import SOURCE_ID_PREFIX as PGO_PREFIX
+from ..clients.peraturan_go_id import PeraturanGoIdClient, PeraturanGoIdRequestError
 from ..config import CollectorSettings
 from ..domain.models import (
     CollectorSource,
@@ -70,16 +72,25 @@ class DiscoveryClient(Protocol):
 
 
 #: Kegagalan jaringan/sementara dari sumber mana pun; kandidatnya dicoba lagi run berikutnya.
-SOURCE_NETWORK_ERRORS = (httpx.TransportError, JdihnRequestError, PasalRequestError)
+SOURCE_NETWORK_ERRORS = (
+    httpx.TransportError,
+    JdihnRequestError,
+    PasalRequestError,
+    PeraturanGoIdRequestError,
+)
 
 
 def _source_url(item: SearchItem, base_url: str) -> str:
+    if item.source_id.startswith(PGO_PREFIX):
+        return f"https://peraturan.go.id/id/{item.source_id[len(PGO_PREFIX) :]}"
     if item.source_id.startswith(SOURCE_ID_PREFIX):
         return f"https://pasal.id/api/v1/laws/{item.source_id[len(SOURCE_ID_PREFIX) :]}"
     return f"{base_url.rstrip('/')}/doc/{item.source_id}"
 
 
 def _pdf_filename(document: SourceDocument) -> str:
+    if document.source_id.startswith(PGO_PREFIX):
+        return f"pgo-{document.source_id[len(PGO_PREFIX) :]}.pdf"
     if document.source_id.startswith(SOURCE_ID_PREFIX):
         slug = document.source_id[len(SOURCE_ID_PREFIX) :].replace("/", "-")
         return f"pasal-{slug}.pdf"
@@ -109,7 +120,28 @@ class CollectorService:
         self._settings = settings
         self._state = state
 
-    def _source_client(self, source: CollectorSource) -> JdihnClient | PasalClient:
+    def _source_client(
+        self, source: CollectorSource, mode: str = "backfill"
+    ) -> JdihnClient | PasalClient | PeraturanGoIdClient:
+        if source == CollectorSource.PERATURAN_GO_ID:
+            name = CollectorSource.PERATURAN_GO_ID.value
+
+            async def get_checkpoint(catalogue: str) -> int:
+                return await self._state.get_checkpoint(name, catalogue)
+
+            async def set_checkpoint(catalogue: str, page: int) -> None:
+                await self._state.set_checkpoint(name, catalogue, page)
+
+            return PeraturanGoIdClient(
+                self._settings.peraturan_go_id_base_url,
+                self._settings.http_timeout_seconds,
+                self._settings.peraturan_go_id_request_delay_seconds,
+                mode=mode,
+                is_known=self._state.is_known,
+                get_checkpoint=get_checkpoint,
+                set_checkpoint=set_checkpoint,
+                max_pages_per_run=self._settings.peraturan_go_id_max_pages,
+            )
         if source == CollectorSource.PASAL_ID:
             return PasalClient(
                 self._settings.pasal_api_base_url,
@@ -139,14 +171,15 @@ class CollectorService:
             source=request.source.value,
         )
         max_actions = request.limit or self._settings.max_uploads_per_run
-        is_pasal = request.source == CollectorSource.PASAL_ID
-        source_label = "pasal.id" if is_pasal else "JDIHN"
-        error_prefix = "PASAL" if is_pasal else "JDIHN"
+        source_label, error_prefix = {
+            CollectorSource.PASAL_ID: ("pasal.id", "PASAL"),
+            CollectorSource.PERATURAN_GO_ID: ("peraturan.go.id", "PGO"),
+        }.get(request.source, ("JDIHN", "JDIHN"))
 
         try:
             async with AsyncExitStack() as stack:
                 source: DiscoveryClient = await stack.enter_async_context(
-                    self._source_client(request.source)
+                    self._source_client(request.source, request.mode)
                 )
                 alignment: AlignmentClient | None = None
                 downloader: PdfDownloader | None = None

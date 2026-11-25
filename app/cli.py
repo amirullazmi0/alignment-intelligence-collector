@@ -69,7 +69,9 @@ def _parse_source(value: str) -> CollectorSource:
         return CollectorSource.JDIHN
     if normalized in {"pasal", "pasal.id", "pasal_id"}:
         return CollectorSource.PASAL_ID
-    raise typer.BadParameter("--source harus jdihn atau pasal")
+    if normalized in {"peraturan", "peraturan.go.id", "peraturan_go_id", "pgo"}:
+        return CollectorSource.PERATURAN_GO_ID
+    raise typer.BadParameter("--source harus jdihn, pasal, atau peraturan")
 
 
 def _build_request(
@@ -166,7 +168,10 @@ def backfill(
     ] = None,
     keywords: Annotated[str | None, typer.Option(help="Keyword tambahan, dipisah koma")] = None,
     source: Annotated[
-        str, typer.Option(help="Sumber discovery: jdihn atau pasal (pasal.id + PDF .go.id)")
+        str,
+        typer.Option(
+            help="Sumber: jdihn, pasal (pasal.id), atau peraturan (katalog peraturan.go.id)"
+        ),
     ] = "jdihn",
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
@@ -185,7 +190,10 @@ def incremental(
     ] = None,
     keywords: Annotated[str | None, typer.Option(help="Keyword tambahan, dipisah koma")] = None,
     source: Annotated[
-        str, typer.Option(help="Sumber discovery: jdihn atau pasal (pasal.id + PDF .go.id)")
+        str,
+        typer.Option(
+            help="Sumber: jdihn, pasal (pasal.id), atau peraturan (katalog peraturan.go.id)"
+        ),
     ] = "jdihn",
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:

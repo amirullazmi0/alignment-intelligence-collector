@@ -183,6 +183,40 @@ class StateStore:
                 timestamp,
             )
 
+    async def is_known(self, source_id: str) -> bool:
+        """Whether a source document is already recorded, in any state."""
+        async with self._db.acquire() as connection:
+            return bool(
+                await connection.fetchval(
+                    "SELECT 1 FROM source_documents WHERE source_id = $1", source_id
+                )
+            )
+
+    async def get_checkpoint(self, source: str, catalogue: str) -> int:
+        """First catalogue page that may still hold unrecorded documents (1 if none)."""
+        async with self._db.acquire() as connection:
+            page = await connection.fetchval(
+                "SELECT next_page FROM catalog_checkpoints WHERE source = $1 AND catalogue = $2",
+                source,
+                catalogue,
+            )
+        return int(page) if page else 1
+
+    async def set_checkpoint(self, source: str, catalogue: str, next_page: int) -> None:
+        async with self._db.acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO catalog_checkpoints (source, catalogue, next_page, updated_at)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (source, catalogue) DO UPDATE
+                    SET next_page = EXCLUDED.next_page, updated_at = EXCLUDED.updated_at
+                """,
+                source,
+                catalogue,
+                next_page,
+                _now(),
+            )
+
     async def reset_permanent_failures(self, error_codes: tuple[str, ...] = ()) -> int:
         """Kembalikan dokumen FAILED_PERMANENT agar dicoba ulang pada run berikutnya.
 
